@@ -1,10 +1,12 @@
 # GoCV Commands
 
-GoCV comes with various useful command line utilities, that are also examples of how to use the package.
+GoCV comes with various useful command line utilities, that are also examples of how to use the
+package.
 
 ## Caffe Classifier
 
-Capture video from a connected webcam, then use the Caffe deep learning framework to classify whatever is in front of the camera.
+Capture video from a connected webcam, then use the Caffe deep learning framework to classify
+whatever is in front of the camera.
 
 https://github.com/hybridgroup/gocv/blob/master/cmd/caffe-classifier/main.go
 
@@ -46,13 +48,15 @@ https://github.com/hybridgroup/gocv/blob/master/cmd/dnn-style-transfer/main.go
 
 ## Faceblur
 
-Captures video from a connected camera, then uses the CascadeClassifier to detect faces, blurs them using a Gaussian blur, then displays the blurred video in a window.
+Captures video from a connected camera, then uses the CascadeClassifier to detect faces, blurs them
+using a Gaussian blur, then displays the blurred video in a window.
 
 https://github.com/hybridgroup/gocv/blob/master/cmd/faceblur/main.go
 
 ## Facedetect
 
-Captures video from a connected camera, then uses the CascadeClassifier to detect faces, and draw a rectangle around each of them, before displaying them within a Window.
+Captures video from a connected camera, then uses the CascadeClassifier to detect faces, and draw a
+rectangle around each of them, before displaying them within a Window.
 
 https://github.com/hybridgroup/gocv/blob/master/cmd/facedetect/main.go
 
