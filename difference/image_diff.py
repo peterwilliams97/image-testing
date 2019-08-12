@@ -1,6 +1,7 @@
 # USAGE
-# python image_diff.py --first images/original_01.png --second images/modified_01.png
-
+# python image_diff.py
+#     -o ~/extracted.images/restoration/adress-change/xx001.png
+#     -s ~/extracted.images/restoration/adress-change/ricoh-c2004/scan_abigailn_2019-08-05-16-39-26_page1_img1.x.jpg
 # import the necessary packages
 from matplotlib import pyplot as plt
 from skimage.measure import compare_ssim
@@ -10,7 +11,7 @@ import cv2
 import numpy as np
 
 # help(cv2.findTransformECC)
-help(cv2.warpAffine)
+# help(cv2.warpAffine)
 
 def match(orig, scan):
     h, w = orig.shape
@@ -87,11 +88,11 @@ def match2(orig, scan):
 
 def matchAffine(orig, scan):
   # Convert images to grayscale
-    im1_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
-    im2_gray = cv2.cvtColor(scan, cv2.COLOR_BGR2GRAY)
+    origGray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+    scanGray = cv2.cvtColor(scan, cv2.COLOR_BGR2GRAY)
 
     # Find size of image1
-    sz = im1_gray.shape
+    sz = origGray.shape
 
     # Define the motion model
     warp_mode = cv2.MOTION_AFFINE
@@ -130,7 +131,7 @@ def matchAffine(orig, scan):
     # scan.aligne = [3300, 2550, 3]
     # SSIM: 0.7687692735152462
 
-    number_of_iterations = 100
+    number_of_iterations = 1000
     # Specify the threshold of the increment
     # in the correlation coefficient between two iterations
     termination_eps = 1e-10
@@ -141,7 +142,7 @@ def matchAffine(orig, scan):
 
     # Run the ECC algorithm. The results are stored in warp_matrix.
     print("before")
-    cc, warp_matrix = cv2.findTransformECC(im1_gray, im2_gray, warp_matrix, warp_mode, criteria,
+    cc, warp_matrix = cv2.findTransformECC(origGray, scanGray, warp_matrix, warp_mode, criteria,
                                            inputMask=None, gaussFiltSize=5)
     print("after")
     print("warp_matrix=%s" % warp_matrix)
@@ -178,13 +179,13 @@ def contract(image, frac):
 
 # construct the argument parse and parse the arguments
 ap = argparse.ArgumentParser()
-ap.add_argument("-f", "--first", required=True, help="first input image")
-ap.add_argument("-s", "--second", required=True, help="second")
+ap.add_argument("-o", "--orig", required=True, help="original image")
+ap.add_argument("-s", "--scan", required=True, help="scanned image")
 args = vars(ap.parse_args())
 
 # load the two input images
-orig = cv2.imread(args["first"])
-scan = cv2.imread(args["second"])
+orig = cv2.imread(args["orig"])
+scan = cv2.imread(args["scan"])
 scan_aligned = matchAffine(orig, scan)
 # scan_aligned = orig
 
