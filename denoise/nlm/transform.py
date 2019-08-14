@@ -3,15 +3,79 @@ import cv2
 import os
 from skimage.measure import compare_ssim
 import numpy as np
+from collections import defaultdict
+from time import time
+
 
 def main():
-    assert len(argv) == 2, (len(argv), argv)
-    origPath = argv[1]
-    print("origPath=%s" % origPath)
+    assert len(argv) > 1, (len(argv), argv)
+    files = []
+    resultsAll = []
 
-    orig = cv2.imread(origPath)
+    t0 = time()
+    for i, origPath in enumerate(argv[1:]):
+        print("@" * 90)
+        orig = cv2.imread(origPath)
+        if orig is None:
+            print("%s not an image. skipping" % origPath)
+        h, w = orig.shape[:2]
+        print("%d: %s %d x %d" % (i, origPath, w, h))
+        if h < 100 or w < 100:
+            print("skipping")
+            continue
+        try:
+            results = runTest(origPath, orig)
+        except Exception as e:
+            print("runTest failed", e)
+            continue
+        resultsAll.append(results)
+        files.append(origPath)
+        dt = time() - t0
+        print("**** dt=%.2f n=%d" % (dt, len(resultsAll)))
+        if dt > 3600 and len(resultsAll) >= 2:
+            break
+    n = len(resultsAll)
+    assert n >=2, n
+
+    resultsMap = defaultdict(list)
+    for results in resultsAll:
+        for i, r in enumerate(results):
+            score, theta, gauss, numIters, m0, m = r
+            key = tuple([theta, gauss, numIters])
+            resultsMap[key].append(r)
+
+    keys = sorted(resultsMap)
+    results = []
+    for k in keys:
+        score = 0.0
+        diff = 0.0
+        rr = []
+        for i in range(n):
+            r = resultsMap[k][i]
+            scoreI, theta, gauss, numIters, m0, m = r
+            dm = m-m0
+            v = np.sum(np.abs(dm))
+            score += scoreI
+            diff += v
+            rr.append(r)
+        results.append((score / n, diff / n, i, rr))
+
+    results.sort(key=lambda x: (x[1], -x[0], x[2]))
+    print("=" * 80)
+    print("%d %s" % (len(files), files))
+    for i, rlst in enumerate(results):
+        score, diff, _, rr = rlst
+        scoreI, theta, gauss, numIters, m0, m = rr[0]
+        print("%d: %.3f %g %.2f %2d %d " % (i, score, diff, theta, gauss, numIters))
+        for j, r in enumerate(rr):
+            scoreI, theta, gauss, numIters, m0, m = r
+            dm = m - m0
+            v = np.sum(np.abs(dm))
+            print("\t%d: %.3f %g %s" % (j, scoreI, v, files[j]))
+
+
+def runTest(origPath, orig):
     h, w = orig.shape[:2]
-
     theta = 2 # degrees
     tx, ty = 0, 0
     M = cv2.getRotationMatrix2D((h/2, w/2), theta, 1)
@@ -22,7 +86,7 @@ def main():
     flags = cv2.INTER_LINEAR
 
     results = []
-    for theta in (0.0, 0.5, 1.0, 2.0, 4.0)[1:4]:
+    for theta in (0.0, 0.5, 1.0, 2.0, 4.0)[3:4]:
         warped = cv2.warpAffine(orig, M, (w, h), flags=flags)
         warpPath = "warp_%.2f_%d_%d" % (theta, tx, ty)
 
@@ -31,7 +95,7 @@ def main():
         cv2.imwrite(warpPath+".png", warped)
 
         for gauss in (5, 7):
-            for numIters in (100, 200):
+            for numIters in (100, 200, 500):
                 scanAligned, warp_matrix = matchAffine(orig, warped, gauss, numIters)
 
                 alignedPath = "align%02d_%s.png" % (gauss, warpPath)
@@ -59,14 +123,8 @@ def main():
 
                 results.append((score, theta, gauss, numIters, M, warp_matrix))
 
-    results.sort(key=lambda x: (-x[0], x[1], x[2]))
-    print("=" * 80)
-    for i, r in enumerate(results):
-        score, theta, gauss, numIters, m0, m = r
-        dm = m-m0
-        v = np.sum(np.abs(dm))
-        print("%d: %.3f %.2f %2d %d %g" % (i, score, theta, gauss, numIters, v))
-        print(dm)
+    return results
+
 
 
 def matchAffine(orig, scan, gauss, numIters=100, warp_mode=cv2.MOTION_EUCLIDEAN):
