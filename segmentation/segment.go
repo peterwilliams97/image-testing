@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"image" // for color.Alpha{a}
+	"image"
 	"image/color"
 	"image/draw"
 	"image/jpeg"
@@ -47,14 +47,24 @@ type createMode int
 const (
 	createSimple createMode = iota
 	createBgd
+	createFgd
 	createCompound
 )
 
-var allModes = []createMode{
-	createSimple,
-	createBgd,
-	createCompound,
-}
+var (
+	modeName = map[createMode]string{
+		createSimple:   "createSimple",
+		createBgd:      "createBgd",
+		createFgd:      "createFgd",
+		createCompound: "createCompound",
+	}
+	allModes = []createMode{
+		createSimple,
+		createBgd,
+		createFgd,
+		createCompound,
+	}
+)
 
 // Default settings
 const (
@@ -103,10 +113,11 @@ func main() {
 // input image in the image file pageName.
 // Creation `mode` can be one of:
 //   createSimple: Build the PDF one input image per page (ignoring rectangles) encoded in `enc`.
-//   createBgd: Build the PDF from the input images with the rectangles knocked out
 //   createCompound: Build the PDF with for each page:
 //     background = input image with the rectangles knocked out, encoded in `bgdEncoding`
-///    foreground = the rectangles extracted from the input image, encoded in `fgdEncoding`.
+//     foreground = the rectangles extracted from the input image, encoded in `fgdEncoding`
+//   createBgd: Build the PDF from only the background images in createCompound.
+//   createFgd: Build the PDF from only the foreground images in createCompound.
 // Example JSON instructions file for a images that are 300 dpi A4 whole page scans.
 //   {
 //     "pdf.output/Volunteer/doc-001.png": [
@@ -122,6 +133,8 @@ func makePdf(jsonPath string, mode createMode, enc imageEncoding) error {
 		outPath = changeExtOnly(jsonPath, fmt.Sprintf(".unmasked.%s.pdf", encodingName[enc]))
 	case createBgd:
 		outPath = changeExtOnly(jsonPath, ".bgd.pdf")
+	case createFgd:
+		outPath = changeExtOnly(jsonPath, ".fgd.pdf")
 	case createCompound:
 		outPath = changeExtOnly(jsonPath, ".masked.pdf")
 	default:
@@ -136,14 +149,6 @@ func makePdf(jsonPath string, mode createMode, enc imageEncoding) error {
 
 	c := creator.New()
 	for _, pagePath := range pageKeys(pageRectList) {
-		// for _, enc := range allEncodings {
-		// 	encPath := changeDirExt(pagePath, fmt.Sprint(".orig.%s", encodingName[enc]))
-		// 	if err = saveImage(encPath, img, enc); err != nil {
-		// 		panic(err)
-		// 	}
-		// 	fmt.Printf("saved original to %q\n", encPath)
-		// }
-
 		rectList := pageRectList[pagePath]
 		err := addImageToPage(c, pagePath, rectList, mode, enc)
 		if err != nil {
@@ -162,11 +167,9 @@ func makePdf(jsonPath string, mode createMode, enc imageEncoding) error {
 // addImageToPage adds the input image in the file `pagePath` to the PDF file represented by `c`.
 // Foreground subimages are created from the rectangles `rectList` applied to this image and a
 // a background image is created by blanking the rectangls on the image.
-//
 func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode createMode,
 	enc imageEncoding) error {
 	bgdPath := changeDirExt(pagePath, ".bgd.png")
-
 	common.Log.Info("addImageToPage: pagePath=%q rectList=%v mode=%#v ", pagePath, rectList, mode)
 
 	img, err := loadImage(pagePath)
@@ -174,7 +177,8 @@ func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode c
 		return err
 	}
 	bounds := img.Bounds()
-	w, h := bounds.Max.X, bounds.Max.Y
+	w := bounds.Max.X - bounds.Min.X
+	h := bounds.Max.Y - bounds.Min.Y
 
 	if mode == createSimple {
 		return placeImageOnPage(c, pagePath, w, h, enc)
@@ -182,33 +186,25 @@ func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode c
 
 	fgdList := makeForegroundList(img, rectList)
 	bgd := makeBackground(img, dilate(rectList, -dilation), mode == createBgd)
+	err = saveImage(bgdPath, bgd, bgdEncoding)
+	if err != nil {
+		panic(err)
+	}
 
 	var fgdPathList []string
 	for i, fgd := range fgdList {
 		fgdPath := makeFgdPath(pagePath, i)
 		err = saveImage(fgdPath, fgd, fgdEncoding)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		fmt.Printf("saved foreground to %q\n", fgdPath)
 		fgdPathList = append(fgdPathList, fgdPath)
 	}
 
-	err = saveImage(bgdPath, bgd, bgdEncoding)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("saved background to %q\n", bgdPath)
-
-	if mode == createBgd {
-		return placeImageOnPage(c, bgdPath, w, h, enc)
-	}
-
-	err = overlayImagesOnPage(c, bgdPath, rectList, fgdPathList, w, h, dilation)
-	if err != nil {
-		panic(err)
-	}
-	return nil
+	doBgd := mode != createFgd
+	doFgd := mode != createBgd
+	common.Log.Info("mode=%v=%#q", mode, modeName[mode])
+	return overlayImagesOnPage(c, bgdPath, rectList, fgdPathList, w, h, doBgd, doFgd)
 }
 
 const (
@@ -244,33 +240,37 @@ func computeScale(width, height, w, h float64) (scale, xOfs, yOfs float64) {
 		xOfs = 0.5 * (width - scale*w)
 	}
 	if xOfs < 0 || yOfs < 0 {
-		panic("Can't happend")
+		panic("can't happen")
 	}
 	return
 }
 
-// overlay image in `fgdPath` over image in `bgdPath` (currently assumed to be have the same
+// overlayImagesOnPage overlay image in `fgdPath` over image in `bgdPath` (currently assumed to be have the same
 // dimensions `w` x `h`) and write the resulting single page `width` x `height` PDF to `outPath`.
 // is the width of the image in PDF document dimensions (height/width ratio is maintained).
 func overlayImagesOnPage(c *creator.Creator, bgdPath string, rectList []Rect, fgdPathList []string,
-	w, h, dilation int) error {
+	w, h int, doBgd, doFgd bool) error {
 	scale, xOfs, yOfs := computeScale(width, height, float64(w), float64(h))
-	common.Log.Info("overlayImagesOnPage: scale=%.3f width=%.1f height=%.1f w=%d h=%d",
+	common.Log.Info("### overlayImagesOnPage: doBgd=%v doFgd=%v", doBgd, doFgd)
+	common.Log.Info("   scale=%.3f width=%.1f height=%.1f w=%d h=%d",
 		scale, width, height, w, h)
-	common.Log.Info("               scale * w x h = %.1f x%.1f", scale*float64(w), scale*float64(h))
-	// c := creator.New()
-	c.NewPage()
+	common.Log.Info("    scale * w x h = %.1f x%.1f", scale*float64(w), scale*float64(h))
 
-	r := Rect{X0: 0, Y0: 0, X1: w, Y1: h}
-	enc := makeEncoder(bgdEncoding, w, h)
-	if err := addImage(c, bgdPath, enc, r, scale, xOfs, yOfs, 0); err != nil {
-		return err
-	}
-	for i, fgdPath := range fgdPathList {
-		r := rectList[i]
-		enc := makeEncoder(fgdEncoding, w, h)
-		if err := addImage(c, fgdPath, enc, r, scale, xOfs, yOfs, dilation); err != nil {
+	c.NewPage()
+	if doBgd {
+		// Draw the background image.
+		r := Rect{X0: 0, Y0: 0, X1: w, Y1: h}
+		if err := addImage(c, bgdPath, bgdEncoding, r, scale, xOfs, yOfs); err != nil {
 			return err
+		}
+	}
+	if doFgd {
+		// Draw the foreground images.
+		for i, fgdPath := range fgdPathList {
+			r := rectList[i]
+			if err := addImage(c, fgdPath, fgdEncoding, r, scale, xOfs, yOfs); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -281,11 +281,12 @@ func placeImageOnPage(c *creator.Creator, bgdPath string, w, h int, enc imageEnc
 	common.Log.Info("placeImageOnPage: scale=%.3f width=%.1f height=%.1f w=%d h=%d",
 		scale, width, height, w, h)
 	common.Log.Info("                  scale * w x h = %.1f x%.1f", scale*float64(w), scale*float64(h))
-	c.NewPage()
 
+	// return overlayImagesOnPage(c, bgdPath, nil, nil, w, h, true, false)
+	c.NewPage()
+	// Draw the background image.
 	r := Rect{X0: 0, Y0: 0, X1: w, Y1: h}
-	encoder := makeEncoder(enc, w, h)
-	if err := addImage(c, bgdPath, encoder, r, scale, xOfs, yOfs, 0); err != nil {
+	if err := addImage(c, bgdPath, enc, r, scale, xOfs, yOfs); err != nil {
 		return err
 	}
 	return nil
@@ -296,6 +297,11 @@ func makeEncoder(enc imageEncoding, w, h int) core.StreamEncoder {
 	case encodeFlate:
 		return core.NewFlateEncoder()
 	case encodeDCT:
+		common.Log.Info("makeEncoder: w=%d h=%d. expected w=2473 h=3358", w, h)
+		if w != 2473 || h != 3358 {
+			common.Log.Error("w=%d h=%d. expected w=2473 h=3358", w, h)
+			// panic("makeEncoder")
+		}
 		dctEnc := core.NewDCTEncoder()
 		dctEnc.Width = w
 		dctEnc.Height = h
@@ -306,16 +312,22 @@ func makeEncoder(enc imageEncoding, w, h int) core.StreamEncoder {
 }
 
 // addImage adds image in `imagePath` to `c` with encoding and scale given by `encoder` and `scale`.
-func addImage(c *creator.Creator, imgPath string, encoder core.StreamEncoder,
-	r Rect, scale, xOfs, yOfs float64, dilation int) error {
+func addImage(c *creator.Creator, imgPath string, enc imageEncoding,
+	r Rect, scale, xOfs, yOfs float64) error {
 	common.Log.Info("addImage: imgPath=%q r=%v", imgPath, r)
 	img, err := c.NewImageFromFile(imgPath)
 	if err != nil {
 		return err
 	}
-	if encoder != nil {
-		img.SetEncoder(encoder)
+
+	goImg, err := loadImage(imgPath)
+	if err != nil {
+		return err
 	}
+	bounds := goImg.Bounds()
+	encoder := makeEncoder(enc, bounds.Max.X, bounds.Max.Y)
+	img.SetEncoder(encoder)
+
 	x, y := float64(r.X0)*scale+xOfs, float64(r.Y0)*scale+yOfs
 	w, h := float64(r.X1-r.X0)*scale, float64(r.Y1-r.Y0)*scale // +1? !@#$
 	common.Log.Info("addImage: r=%v scale=%.3f xOfs=%.3f yOfs=%.3f", r, scale, xOfs, yOfs)
@@ -326,34 +338,15 @@ func addImage(c *creator.Creator, imgPath string, encoder core.StreamEncoder,
 	return c.Draw(img)
 }
 
-// makeForeground returns `img` masked to the rectangles in `rectList`.
-func _makeForeground(img image.Image, rectList []Rect) image.Image {
-	bounds := img.Bounds()
-	w, h := bounds.Max.X, bounds.Max.Y
-	r := fromBounds(bounds)
-	fmt.Printf("makeForeground: rectList=%v\n", rectList)
-	fmt.Printf("bounds=%#v\n", bounds)
-	fmt.Printf("r=%#v\n", r)
-	fmt.Printf("w=%d h=%d\n", w, h)
-
-	rgba := image.NewRGBA(img.Bounds())
-	fillRect(rgba, r, image.Transparent)
-	for _, r := range rectList {
-		draw.Draw(rgba, r.bounds(), img, r.position(), draw.Src)
-		// fillRect(rgba, r, image.White)
-	}
-	return rgba
-}
-
 // makeForegroundList images of returns `img` clipped by the rectangles in `rectList`.
 func makeForegroundList(img image.Image, rectList []Rect) []image.Image {
 	bounds := img.Bounds()
-	w, h := bounds.Max.X, bounds.Max.Y
+	w := bounds.Max.X - bounds.Min.X
+	h := bounds.Max.Y - bounds.Min.Y
 	r := fromBounds(bounds)
-	fmt.Printf("makeForegroundList: rectList=%v\n", rectList)
-	fmt.Printf("bounds=%#v\n", bounds)
-	fmt.Printf("r=%#v\n", r)
-	fmt.Printf("w=%d h=%d\n", w, h)
+	common.Log.Info("makeForegroundList: rectList=%v", rectList)
+	common.Log.Info("bounds=%#v", bounds)
+	common.Log.Info("r=%#v w=%d h=%d", r, w, h)
 
 	fgdList := make([]image.Image, len(rectList))
 	for i, r := range rectList {
@@ -361,7 +354,8 @@ func makeForegroundList(img image.Image, rectList []Rect) []image.Image {
 		wind := r.bounds()
 		draw.Draw(rgba, r.zpBounds(), img, r.position(), draw.Src)
 		fgdList[i] = rgba
-		fmt.Printf("%4d: %v=%v -> %v\n", i, r, wind, rgba.Bounds())
+		common.Log.Info("%4d: %v=%v -> %v", i, r, wind, rgba.Bounds())
+		// panic("$")
 	}
 	return fgdList
 }
@@ -372,12 +366,12 @@ func makeForegroundList(img image.Image, rectList []Rect) []image.Image {
 // knockouts.
 func makeBackground(img image.Image, rectList []Rect, highlight bool) image.Image {
 	bounds := img.Bounds()
-	w, h := bounds.Max.X, bounds.Max.Y
+	w := bounds.Max.X - bounds.Min.X
+	h := bounds.Max.Y - bounds.Min.Y
 	r := fromBounds(bounds)
-	fmt.Printf("makeBackground: rectList=%v\n", rectList)
-	fmt.Printf("bounds=%#v\n", bounds)
-	fmt.Printf("r=%#v\n", r)
-	fmt.Printf("w=%d h=%d\n", w, h)
+	common.Log.Info("makeBackground: rectList=%v", rectList)
+	common.Log.Info("bounds=%#v", bounds)
+	common.Log.Info("r=%#v w=%d h=%d", r, w, h)
 
 	fillColor := knockoutColor
 	if highlight {
@@ -431,7 +425,6 @@ func dilate(rectList []Rect, d int) []Rect {
 		r.Y1 += d
 		outList[i] = r
 	}
-	fmt.Printf("dilate: d=%d %v->%v\n", d, rectList, outList)
 	return outList
 }
 
