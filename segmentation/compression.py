@@ -45,14 +45,14 @@ def main():
         print("%6d: %4.2f (%4.2f) %5.2f MB [%s] %s" % (i, size/sizePng, sizeBgd/sizePng, size,
           time.ctime(os.path.getmtime(fn)), fn))
 
-    print("=" * 80)
+    print("    %s" % ("=" * 80))
     n = len(pdfFiles)
     if n == 0:
         return
 
-    print("Compressed = %2d = %5.1f%%" % (nCompressed, 100.0 * nCompressed / n))
-    print("      Same = %2d = %5.1f%%" % (nSame, 100.0 * nSame / n))
-    print("  Expanded = %2d = %5.1f%%" % (nExpanded, 100.0 * nExpanded / n))
+    print("    Compressed = %2d = %5.1f%%" % (nCompressed, 100.0 * nCompressed / n))
+    print("          Same = %2d = %5.1f%%" % (nSame, 100.0 * nSame / n))
+    print("      Expanded = %2d = %5.1f%%" % (nExpanded, 100.0 * nExpanded / n))
 
 
 def ratio(filename, suffix):
