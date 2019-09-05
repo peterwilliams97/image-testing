@@ -1,10 +1,33 @@
 #!/usr/bin/env python
+"""
+    Find high entropy regions in a PDF.
 
-from PIL import Image, ImageDraw
-import random as pyrandom
+    The entire algorithm is this
+
+    entropyKernel = skimage.morphology.disk(25)
+    entropyThreshold = 4.0
+    minArea = 90000  # 300 x 300 pixels = 1 x 1 inch
+    contourEpsilon = 0.02
+
+    entImageGray = skimage.filters.entropy(image, entropyKernel)
+    entImage = np.array(entImageGray > entropyThreshold, dtype=entImage.dtype)
+    edged = cv2.Canny(entImage, 30, 200)
+    edgedD = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, outlineKernel)
+    contours, _ = cv2.findContours(edgedD.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours.sort(key=cv2.contourArea, reverse=True)
+    rects = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, contourEpsilon * peri, True)
+        x, y, w, h = cv2.boundingRect(approx)
+        if area < minArea:
+            break
+        rects.append({"X0": x, "Y0": y, "X1": x+w, "Y1": y+h})
+"""
 import sys
-import os.path
 import shutil
+import os
 import re
 import subprocess
 import numpy as np
@@ -17,9 +40,7 @@ from skimage.util import img_as_ubyte
 import cv2
 import json
 from pprint import pprint
-"""
-    Find high entropy regions in a PDF
-"""
+
 
 # All files are saved in outPdfRoot.
 outPdfRoot = os.path.abspath("pdf.output")
@@ -28,7 +49,7 @@ outPdfRoot = os.path.abspath("pdf.output")
 entropyKernel = disk(25)
 
 # Entropy threshold. Regions with entropy above (below) this are considered natural (synthetic).
-entropyThreshold = 2.0
+entropyThreshold = 4.0
 
 # Outline of high-entropy region is morphologically closed with this kernel
 outlineKernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (125, 125))
@@ -36,6 +57,8 @@ outlineKernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (125, 125))
 # We only save high-entropy rectangles at leas this many pixels of larger.
 # minArea = 10000  # 100 x 100 pixels = 1/3 x 1/3 inch
 minArea = 90000  # 300 x 300 pixels = 1 x 1 inch
+
+contourEpsilon = 0.02
 
 
 def main():
@@ -72,6 +95,8 @@ def main():
 
 
 def derived(filename):
+    """Return True if `filename` is one of the PDF files we create.
+    """
     name = os.path.basename(filename)
     return name.count(".") > 1
 
@@ -82,9 +107,6 @@ def processPdfFile(pdfFile, start, end, needed, force):
     baseBase, _ = os.path.splitext(baseName)
     outPdfFile = os.path.join(outPdfRoot, baseName)
     outJsonFile = os.path.join(outPdfRoot, "%s.json" % baseBase)
-    # with open(outJsonFile, "w") as f:
-    #     print("outJsonFile=%s" % outJsonFile)
-    #     print("EMPTY", file=f)
     outRoot = os.path.join(outPdfRoot, baseBase)
 
     if not force and os.path.exists(outJsonFile):
@@ -114,9 +136,7 @@ def processPdfFile(pdfFile, start, end, needed, force):
         print("@31", start, end)
         rects = processPngFile(outRoot, origFile, fileNum)
         pageRects[origFile] = rects
-        # if rects:
         numPages += 1
-    # assert numPages > 0, pageRects
 
     shutil.copyfile(pdfFile, outPdfFile)
     print("=" * 80)
@@ -143,7 +163,6 @@ def processPngFile(outRoot, origFile, fileNum):
     outFile2 = os.path.join(outRoot2, "%s.entropy" % outDir2, "%s.thresh.png" % baseBase)
     outFile2Gray = os.path.join(outRoot2, "%s.entropy" % outDir2, "%s.levels.png" % baseBase)
     print("outFile2=%s" % outFile2)
-    # assert False
 
     imageColor = imread(origFile, as_gray=False)
     imageColor = img_as_ubyte(imageColor)
@@ -192,11 +211,11 @@ def processPngFile(outRoot, origFile, fileNum):
     for i, c in enumerate(contours):
         area = cv2.contourArea(c)
         peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        approx = cv2.approxPolyDP(c, contourEpsilon * peri, True)
         x, y, w, h = cv2.boundingRect(approx)
         print("## %d: area=%g peri=%g p/a=%g %s %s" % (i, area, peri, peri*peri/area, [x, y], [w, h]))
         if area < minArea:
-            continue
+            break
 
         rect = {"X0": x, "Y0": y, "X1": x+w, "Y1": y+h}
         rects.append(rect)
@@ -209,8 +228,6 @@ def processPngFile(outRoot, origFile, fileNum):
         for r in rects[:-1]:
             if overlaps:
                 print("@@@@ \n%s overlaps\n%s\n%s" % (rect, r, rects[:-1]))
-                # return []
-            # assert not overlaps(rect, r), "\n%s overlaps\n%s\n%s" % (rect, r, rects[:-1])
 
         if cImEFull is None:
             cImEFull = imageColor.copy()
@@ -341,14 +358,16 @@ def runGhostscript(pdf, outputDir):
     return retval
 
 
+segmentBin = "./segment"
+assert os.path.exists(segmentBin), "Please build segment.go"
+
 def runSegment(outJsonFile):
     """runSegment runs segment on file `outJsonFile` to create `outSegmentFle`.
     """
     name, _ = os.path.splitext(outJsonFile)
     outSegmentFile = "%s.masked.pdf" % name
 
-    cmd = ["./segment", outJsonFile]
-    print("runSegment: cmd=%s -> %s" % (cmd, outSegmentFile))
+    cmd = [segmentBin, outJsonFile]
     p = subprocess.Popen(cmd, shell=False)
     retval = p.wait()
     print("retval=%d" % retval)
@@ -359,7 +378,7 @@ def runSegment(outJsonFile):
 
 
 def desc(a):
-    """desc returns a descripiton on numpy array `a`
+    """desc returns a description on numpy array `a`
     """
     r = a.ravel()
     tr = [0.0, 0.1, 1.0, 10.0, 25.0]
