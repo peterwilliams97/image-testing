@@ -7,7 +7,7 @@
         - A candidate image segmentation algorithm. This is a simple entropy measure
         - Diagnostics. Images showing the processing step and prints
 
-    The entire image segmentation algorithm is
+    The entire image segmentation algorithm and tuning parameters are directly below.
 
     # 300 dpi is a good resolution for scanning for digital archiving and OCR
     rasterDPI = 300
@@ -18,6 +18,7 @@
     minArea = 90000          # 300 x 300 pixels = 1 x 1 inch
     contourEpsilon = 0.02
 
+    # Algorithm
     entImageGray = skimage.filters.entropy(image, entropyKernel)
     entImage = np.array(entImageGray > entropyThreshold, dtype=entImage.dtype)
     edged = cv2.Canny(entImage, 30, 200)
