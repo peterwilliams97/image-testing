@@ -2,11 +2,20 @@
 """
     Find high entropy regions in a PDF.
 
-    The entire algorithm is this
+    This script contains
+        - A hacky test framework
+        - A candidate image segmentation algorithm. This is a simple entropy measure
+        - Diagnostics. Images showing the processing step and prints
 
+    The entire image segmentation algorithm is
+
+    # 300 dpi is a good resolution for scanning for digital archiving and OCR
+    rasterDPI = 300
+
+    # Tuning parameters. These will depend on rasterDPI.
     entropyKernel = skimage.morphology.disk(25)
     entropyThreshold = 4.0
-    minArea = 90000  # 300 x 300 pixels = 1 x 1 inch
+    minArea = 90000          # 300 x 300 pixels = 1 x 1 inch
     contourEpsilon = 0.02
 
     entImageGray = skimage.filters.entropy(image, entropyKernel)
@@ -45,6 +54,9 @@ from pprint import pprint
 # All files are saved in outPdfRoot.
 outPdfRoot = os.path.abspath("pdf.output")
 
+# DPI used for the rasters being tested
+rasterDPI = 300
+
 # Entropy is measured over the entropyKernel.
 entropyKernel = disk(25)
 
@@ -55,9 +67,9 @@ entropyThreshold = 4.0
 outlineKernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (125, 125))
 
 # We only save high-entropy rectangles at leas this many pixels of larger.
-# minArea = 10000  # 100 x 100 pixels = 1/3 x 1/3 inch
 minArea = 90000  # 300 x 300 pixels = 1 x 1 inch
 
+# Tolerance for polygon approximation. This is a fraction of the perimeter length.
 contourEpsilon = 0.02
 
 
@@ -210,12 +222,12 @@ def processPngFile(outRoot, origFile, fileNum):
     cImEFull = None
     for i, c in enumerate(contours):
         area = cv2.contourArea(c)
+        if area < minArea:
+            break
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, contourEpsilon * peri, True)
         x, y, w, h = cv2.boundingRect(approx)
         print("## %d: area=%g peri=%g p/a=%g %s %s" % (i, area, peri, peri*peri/area, [x, y], [w, h]))
-        if area < minArea:
-            break
 
         rect = {"X0": x, "Y0": y, "X1": x+w, "Y1": y+h}
         rects.append(rect)
@@ -335,7 +347,7 @@ def runGhostscript(pdf, outputDir):
            "-dSAFER",
            "-dBATCH",
            "-dNOPAUSE",
-           "-r300",
+           "-r%d" % rasterDPI,
            "-sDEVICE=png16m",
            "-dTextAlphaBits=1",
            "-dGraphicsAlphaBits=1",
@@ -378,7 +390,7 @@ def runSegment(outJsonFile):
 
 
 def desc(a):
-    """desc returns a description on numpy array `a`
+    """desc returns a text description on numpy array `a`.
     """
     r = a.ravel()
     tr = [0.0, 0.1, 1.0, 10.0, 25.0]
