@@ -9,13 +9,13 @@ Results  5 September 2019
      0: 0.05 (0.02)  0.54 MB [Thu Sep  5 10:35:44 2019] pdf.output/green_jobs.masked.pdf
      1: 0.07 (0.04)  0.90 MB [Thu Sep  5 10:11:10 2019] pdf.output/Volunteer.masked.pdf
      2: 0.08 (0.03)  0.53 MB [Thu Sep  5 10:39:11 2019] pdf.output/HistoryOfRome.masked.pdf
-    3: 0.09 (0.06)  0.91 MB [Thu Sep  5 11:02:28 2019] pdf.output/good_guts.masked.pdf
-    4: 0.10 (0.08)  0.60 MB [Thu Sep  5 10:57:25 2019] pdf.output/NewsletterIssue1-1.masked.pdf
-    5: 0.10 (0.07)  0.62 MB [Thu Sep  5 10:24:20 2019] pdf.output/william-shakespeare.masked.pdf
-    6: 0.11 (0.08)  0.55 MB [Thu Sep  5 10:21:06 2019] pdf.output/shakespeare.masked.pdf
-    7: 0.11 (0.07)  0.50 MB [Thu Sep  5 10:27:02 2019] pdf.output/ap5.masked.pdf
-    8: 0.12 (0.05)  0.50 MB [Thu Sep  5 10:49:39 2019] pdf.output/global.masked.pdf
-    9: 0.13 (0.10)  1.32 MB [Thu Sep  5 10:54:41 2019] pdf.output/adobe-sign.masked.pdf
+     3: 0.09 (0.06)  0.91 MB [Thu Sep  5 11:02:28 2019] pdf.output/good_guts.masked.pdf
+     4: 0.10 (0.08)  0.60 MB [Thu Sep  5 10:57:25 2019] pdf.output/NewsletterIssue1-1.masked.pdf
+     5: 0.10 (0.07)  0.62 MB [Thu Sep  5 10:24:20 2019] pdf.output/william-shakespeare.masked.pdf
+     6: 0.11 (0.08)  0.55 MB [Thu Sep  5 10:21:06 2019] pdf.output/shakespeare.masked.pdf
+     7: 0.11 (0.07)  0.50 MB [Thu Sep  5 10:27:02 2019] pdf.output/ap5.masked.pdf
+     8: 0.12 (0.05)  0.50 MB [Thu Sep  5 10:49:39 2019] pdf.output/global.masked.pdf
+     9: 0.13 (0.10)  1.32 MB [Thu Sep  5 10:54:41 2019] pdf.output/adobe-sign.masked.pdf
     10: 0.17 (0.13)  0.18 MB [Thu Sep  5 10:52:48 2019] pdf.output/01-intro.masked.pdf
     11: 0.21 (0.05)  0.79 MB [Thu Sep  5 10:55:26 2019] pdf.output/studies_2012_2.masked.pdf
     12: 0.23 (0.17)  0.28 MB [Thu Sep  5 10:51:14 2019] pdf.output/NeAF-BPG-vol1.masked.pdf
@@ -76,6 +76,5 @@ Results  5 September 2019
     67: 1.00 (1.00)  0.00 MB [Thu Sep  5 10:42:06 2019] pdf.output/legal-certificate.masked.pdf
     ================================================================================
     Compressed = 37 =  54.4%
-    Same = 31 =  45.6%
+          Same = 31 =  45.6%
     Expanded =  0 =   0.0%
-

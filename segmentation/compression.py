@@ -42,7 +42,7 @@ def main():
             nExpanded += 1
         else:
             nSame += 1
-        print("%3d: %4.2f (%4.2f) %5.2f MB [%s] %s" % (i, size/sizePng, sizeBgd/sizePng, size,
+        print("%6d: %4.2f (%4.2f) %5.2f MB [%s] %s" % (i, size/sizePng, sizeBgd/sizePng, size,
           time.ctime(os.path.getmtime(fn)), fn))
 
     print("=" * 80)
