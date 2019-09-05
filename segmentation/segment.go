@@ -1,6 +1,21 @@
 //
 // Segment images then combine the segments in a PDF file.
+// Another program will create a JSON file with segmentation instructions. This program reads the
+// JSON file, segments the images referenced in the JSON file, encodes rectangle enclosed segements
+// as DCT, encoded the rest of the image as Flate then combines the images in a PDF file.
 //
+// Example JSON instructions file for a images that are 300 dpi A4 whole page scans.
+//   {
+//     "pdf.output/Volunteer/doc-001.png": [
+//         {"X0":   0,  "Y0":    0, "Y1": 2450} ],
+//     "pdf.output/Volunteer/doc-002.png": [
+//         {"X0": 356, "X1": 2148, "Y0": 1432, "Y1": 2935},
+//         {"X0":  66, "X1": 118,  "Y0":  990, "Y1": 3508} ]
+//   }
+//
+// The example JSON files references 300 dpi RGB raster files doc-001.png and doc-002.png. It
+// requests that the area x,y: X0 <= x < X1 and Y0 <= y < Y1 for all the rectangles for that page
+// be DCT encoded and the remainder of the image be Flate encoded.
 package main
 
 import (
@@ -118,14 +133,6 @@ func main() {
 //     foreground = the rectangles extracted from the input image, encoded in `fgdEncoding`
 //   createBgd: Build the PDF from only the background images in createCompound.
 //   createFgd: Build the PDF from only the foreground images in createCompound.
-// Example JSON instructions file for a images that are 300 dpi A4 whole page scans.
-//   {
-//     "pdf.output/Volunteer/doc-001.png": [
-//         {"X0":   0, "X1": 2481, "Y0":    0, "Y1": 2450} ],
-//     "pdf.output/Volunteer/doc-002.png": [
-//         {"X0": 356, "X1": 2148, "Y0": 1432, "Y1": 2935},
-//         {"X0":  66, "X1": 118,  "Y0":  990, "Y1": 3508} ]
-//   }
 func makePdf(jsonPath string, mode createMode, enc imageEncoding) error {
 	var outPath string
 	switch mode {
@@ -297,11 +304,6 @@ func makeEncoder(enc imageEncoding, w, h int) core.StreamEncoder {
 	case encodeFlate:
 		return core.NewFlateEncoder()
 	case encodeDCT:
-		common.Log.Info("makeEncoder: w=%d h=%d. expected w=2473 h=3358", w, h)
-		if w != 2473 || h != 3358 {
-			common.Log.Error("w=%d h=%d. expected w=2473 h=3358", w, h)
-			// panic("makeEncoder")
-		}
 		dctEnc := core.NewDCTEncoder()
 		dctEnc.Width = w
 		dctEnc.Height = h
