@@ -6,9 +6,9 @@ TODO - Entropy
 
 Results  5 September 2019
 -------------------------
-    0: 0.05 (0.02)  0.54 MB [Thu Sep  5 10:35:44 2019] pdf.output/green_jobs.masked.pdf
-    1: 0.07 (0.04)  0.90 MB [Thu Sep  5 10:11:10 2019] pdf.output/Volunteer.masked.pdf
-    2: 0.08 (0.03)  0.53 MB [Thu Sep  5 10:39:11 2019] pdf.output/HistoryOfRome.masked.pdf
+     0: 0.05 (0.02)  0.54 MB [Thu Sep  5 10:35:44 2019] pdf.output/green_jobs.masked.pdf
+     1: 0.07 (0.04)  0.90 MB [Thu Sep  5 10:11:10 2019] pdf.output/Volunteer.masked.pdf
+     2: 0.08 (0.03)  0.53 MB [Thu Sep  5 10:39:11 2019] pdf.output/HistoryOfRome.masked.pdf
     3: 0.09 (0.06)  0.91 MB [Thu Sep  5 11:02:28 2019] pdf.output/good_guts.masked.pdf
     4: 0.10 (0.08)  0.60 MB [Thu Sep  5 10:57:25 2019] pdf.output/NewsletterIssue1-1.masked.pdf
     5: 0.10 (0.07)  0.62 MB [Thu Sep  5 10:24:20 2019] pdf.output/william-shakespeare.masked.pdf
