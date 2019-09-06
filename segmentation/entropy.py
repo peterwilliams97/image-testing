@@ -17,6 +17,7 @@
     entropyThreshold = 4.0
     minArea = 90000          # 300 x 300 pixels = 1 x 1 inch
     contourEpsilon = 0.02
+    outlineKernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (125, 125))
 
     # Algorithm
     entImageGray = skimage.filters.entropy(image, entropyKernel)
@@ -50,6 +51,7 @@ from skimage.util import img_as_ubyte
 import cv2
 import json
 from pprint import pprint
+from deoverlap import reduceRectDicts
 
 
 # All files are saved in outPdfRoot.
@@ -84,7 +86,7 @@ def main():
                         help="min number of pages required")
     parser.add_argument("files", nargs="+",
                         help="input files; glob and @ expansion performed")
-    parser.add_argument("-o", "--force", action="store_true",
+    parser.add_argument("-f", "--force", action="store_true",
                         help="force processing of PDF file")
 
     args = parser.parse_args()
@@ -146,8 +148,9 @@ def processPdfFile(pdfFile, start, end, needed, force):
                 if not (needed >= 0 and numPages < needed):
                     print("@2", [start, end], [numPages, needed])
                     continue
-        print("@31", start, end)
+
         rects = processPngFile(outRoot, origFile, fileNum)
+        rects = reduceRectDicts(rects)
         pageRects[origFile] = rects
         numPages += 1
 
@@ -238,10 +241,6 @@ def processPngFile(outRoot, origFile, fileNum):
         cIm = cv2.rectangle(cIm, (x, y),  (x+w, y+h), color=(255, 0, 0), thickness=20)
         cIm = cv2.rectangle(cIm, (x, y),  (x+w, y+h), color=(0, 0, 255), thickness=10)
 
-        for r in rects[:-1]:
-            if overlaps:
-                print("@@@@ \n%s overlaps\n%s\n%s" % (rect, r, rects[:-1]))
-
         if cImEFull is None:
             cImEFull = imageColor.copy()
         cImEFull = cv2.rectangle(cImEFull, (x, y), (x+w, y+h), color=(255, 0, 0), thickness=20)
@@ -277,41 +276,6 @@ def processPngFile(outRoot, origFile, fileNum):
         print("~$~Saved %s" % cNameEFull)
     # assert False
     return rects
-
-
-verbose = False
-
-
-def overlaps(rect1Dict, rect2Dict):
-    rect1 = expandRect(rect1Dict)
-    rect2 = expandRect(rect2Dict)
-    bad = containsRect(rect1, rect2) or containsRect(rect1, rect2)
-    if bad:
-        print("    overlaps: bad=%s rect1=%s rect2=%s" % (bad, rect1, rect2))
-    return bad
-
-
-def containsRect(rect, rectIn):
-    x0, y0, x1, y1 = rectIn
-    corners = [(x0, y0), (x0, y1), (x1, y0), (x1, y1)]
-    bad = any(containsPt(rect, pt) for pt in corners)
-    if bad:
-        print("containsRect: bad=%s rect=%s rectIn=%s" % (bad, rect, rectIn))
-    return bad
-
-
-def containsPt(rect, pt):
-    x0, y0, x1, y1 = rect
-    x, y = pt
-    bad = x0 <= x <= x1 and y0 <= y <= y1
-    if bad:
-        print("  containsPt: bad=%s rect=%s pt=%s" % (bad, rect, pt))
-    return bad
-
-
-def expandRect(rect):
-    x0, y0, x1, y1 = (rect[k] for k in ("X0", "Y0", "X1", "Y1"))
-    return x0, y0, x1, y1
 
 
 def normalize(a):
