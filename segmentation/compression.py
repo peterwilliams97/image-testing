@@ -69,7 +69,7 @@ def main():
             nSame += 1
         lines.append("%6d: %4.2f %5.2f (%4.2f) %5.2f MB [%s] %s" % (i,
             size/sizePng,  size/sizeJpg, sizeBgd/sizePng, size,
-            time.ctime(os.path.getmtime(fn)), fn))
+            time.ctime(os.path.getmtime(fn)), os.path.basename(fn)))
 
     n = len(pdfFiles)
     if n == 0:
