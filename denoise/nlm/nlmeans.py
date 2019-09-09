@@ -20,10 +20,8 @@ def main():
 
     for templSize in (7, 9):
         for searchSize in (13, 21):
-            denoised_path = '%s_denoised_%dx%d.png' % (
-                 name, templSize, searchSize)
-            denoised_gray_path = '%s_denoised_gray_%dx%d.png' % (
-                name, templSize, searchSize)
+            denoised_path = '%s_denoised_%dx%d.png' % (name, templSize, searchSize)
+            denoised_gray_path = '%s_denoised_gray_%dx%d.png' % (name, templSize, searchSize)
             denoised_gray = cv2.fastNlMeansDenoising(source_gray, None,
                                             templateWindowSize=templSize,
                                             searchWindowSize=searchSize)

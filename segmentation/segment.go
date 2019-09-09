@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/ultimate-guitar/go-imagequant"
 	"github.com/unidoc/unipdf/v3/common"
 	"github.com/unidoc/unipdf/v3/core"
 	"github.com/unidoc/unipdf/v3/creator"
@@ -92,8 +93,8 @@ const (
 
 // More default settings
 var (
-	knockoutColor  = image.White                                    // knockoutColor is used for drawing knockouts in the background
-	highlightColor = image.NewUniform(color.RGBA{B: 0xFF, A: 0xFF}) // for showing knockout locations
+	knockoutColor  = image.NewUniform(color.RGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}) // image.White                                    // knockoutColor is used for drawing knockouts in the background
+	highlightColor = image.NewUniform(color.RGBA{B: 0xFF, A: 0xFF})                   // for showing knockout locations
 )
 
 const usage = "go run segment.go <json file>"
@@ -196,6 +197,22 @@ func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode c
 	err = saveImage(bgdPath, bgd, bgdEncoding)
 	if err != nil {
 		panic(err)
+	}
+
+	makePrintHistogram("background", bgd)
+	if histogramQuanitizable(bgd) {
+		crushedPath := bgdPath + ".crushed.png"
+		err = crushFile(bgdPath, crushedPath, 3, png.BestCompression)
+		if err != nil {
+			panic(err)
+		}
+		// TODO: Figure out how to work with paletted PNGs !@#$
+		// bgdPath = crushedPath
+		// bgd, err := loadImage(bgdPath)
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// makePrintHistogram("crushed", bgd)
 	}
 
 	var fgdPathList []string
@@ -362,7 +379,7 @@ func makeForegroundList(img image.Image, rectList []Rect) []image.Image {
 	return fgdList
 }
 
-// makeForeground returns `img` with the rectangles in `rectList` knocked out.
+// makeBackground returns `img` with the rectangles in `rectList` knocked out.
 // If `higlight` is true the knockouts are filled with a highlight color, otherwise a color that
 // compresses well. The color that will compress best is the background color of `img` around the
 // knockouts.
@@ -386,6 +403,187 @@ func makeBackground(img image.Image, rectList []Rect, highlight bool) image.Imag
 		fillRect(rgba, r, fillColor)
 	}
 	return rgba
+}
+
+func makePrintHistogram(title string, img image.Image) {
+	n, histo := histogram(img)
+	printHistogram(title, n, histo)
+}
+
+func histogramQuanitizable(img image.Image) bool {
+	n, histo := histogram(img)
+	maxColors := 255
+	threshold := 0.99
+	return quanitizable(n, histo, maxColors, threshold)
+}
+
+func histogram(imgIn image.Image) (int, map[uint32]int) {
+	img := imgIn.(*image.RGBA)
+	bounds := img.Bounds()
+	w := bounds.Max.X - bounds.Min.X
+	h := bounds.Max.Y - bounds.Min.Y
+
+	histo := map[uint32]int{}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			p := img.RGBAAt(x, y)
+			r, g, b, a := p.RGBA()
+			u := r + g<<8 + b<<16 + a<<24
+			histo[u]++
+		}
+	}
+	return w * h, histo
+}
+
+func quanitizable(n int, histo map[uint32]int, maxColors int, threshold float64) bool {
+	var keys []uint32
+	for u := range histo {
+		keys = append(keys, u)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ki, kj := keys[i], keys[j]
+		hi, hj := histo[ki], histo[kj]
+		if hi != hj {
+			return hi >= hj
+		}
+		return ki < kj
+	})
+
+	m := len(histo)
+	if m > maxColors {
+		m = maxColors
+	}
+	cumulative := 0
+	for _, u := range keys[:m] {
+		cumulative += histo[u]
+	}
+	fraction := float64(cumulative) / float64(n)
+	possible := fraction >= threshold
+
+	common.Log.Info("quanitizable: %d colors %d pixels maxColors=%d => threshold=%.1f%%\n"+
+		"\tfraction=%.1f%% possible=%t",
+		len(histo), n, maxColors, 100.0*threshold, 100.0*fraction, possible)
+	return possible
+}
+
+func printHistogram(title string, n int, histo map[uint32]int) {
+	var keys []uint32
+	for u := range histo {
+		keys = append(keys, u)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ki, kj := keys[i], keys[j]
+		hi, hj := histo[ki], histo[kj]
+		if hi != hj {
+			return hi >= hj
+		}
+		return ki < kj
+	})
+
+	common.Log.Info("printHistogram: %q %d colors %d pixels.\n\tMost common colors:",
+		title, len(histo), n)
+
+	thresholdCount := map[float64]int{}
+	cumulative := 0
+	color256 := -1
+	tk := 0
+	for i, u := range keys {
+		r := u & 0xff
+		g := (u >> 8) & 0xff
+		b := (u >> 16) & 0xff
+		a := (u >> 24) & 0xff
+		cnt := histo[u]
+		cumulative += cnt
+		if i < maxColors {
+			fmt.Printf("%4d: 0x%08X (%3d %3d %3d | %3d) %7d %5.1f%% %g%%\n",
+				i, u, r, g, b, a, cnt, 100.0*float64(cnt)/float64(n), 100.0*float64(cumulative)/float64(n))
+		}
+		for tk < len(thresholdSteps) && float64(cumulative)/float64(n) >= thresholdSteps[tk] {
+			thresholdCount[thresholdSteps[tk]] = i + 1
+			tk++
+		}
+		if i == 255 {
+			color256 = cumulative
+		}
+	}
+	if color256 < 0 {
+		color256 = cumulative
+	}
+
+	common.Log.Info("Histogram: %d thresholds %d pixels %d colors", tk, n, len(histo))
+	for k := 0; k < tk; k++ {
+		threshold := thresholdSteps[k]
+		cnt := thresholdCount[threshold]
+		fmt.Printf("%4d: %6.2f%% pixels covered by %8d = %5.1f%% colors\n", k, 100.0*threshold, cnt,
+			100.0*float64(cnt)/float64(len(histo)))
+	}
+	common.Log.Info("256 colors cover %d = %5.1f%% pixels", color256,
+		100.0*float64(color256)/float64(n))
+}
+
+const maxColors = 10
+
+var thresholdSteps = []float64{
+	0.25,
+	0.50,
+	0.75,
+	0.90,
+	0.95,
+	0.99,
+	0.995,
+	0.999,
+	0.9995,
+	0.9999,
+}
+
+func crushFile(srcPath, dstPath string, speed int, compression png.CompressionLevel) error {
+	err := crushFile_(srcPath, dstPath, speed, compression)
+	if err != nil {
+		return err
+	}
+	srcMB := fileSizeMB(srcPath)
+	dstMB := fileSizeMB(dstPath)
+	common.Log.Info("crushFile: %q->%q", srcPath, dstPath)
+	common.Log.Info("crushFile: %.3f MB -> %.3f MB %.1f%% ", srcMB, dstMB, 100.0*dstMB/srcMB)
+	return nil
+}
+
+func crushFile_(srcPath, dstPath string, speed int, compression png.CompressionLevel) error {
+	common.Log.Info("crushFile: %q->%q", srcPath, dstPath)
+
+	sourceFh, err := os.OpenFile(srcPath, os.O_RDONLY, 0444)
+	if err != nil {
+		return fmt.Errorf("os.OpenFile: %s", err.Error())
+	}
+	defer sourceFh.Close()
+
+	image, err := ioutil.ReadAll(sourceFh)
+	if err != nil {
+		return fmt.Errorf("ioutil.ReadAll: %s", err.Error())
+	}
+
+	optiImage, err := imagequant.Crush(image, speed, compression)
+	if err != nil {
+		return fmt.Errorf("imagequant.Crush: %s", err.Error())
+	}
+
+	destFh, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("os.OpenFile: %s", err.Error())
+	}
+	defer destFh.Close()
+
+	destFh.Write(optiImage)
+	return nil
+}
+
+func fileSizeMB(filename string) float64 {
+	fi, err := os.Stat(filename)
+	if err != nil {
+		common.Log.Error("Stat failed. filename=%q err=%v", filename, err)
+		return -1.0
+	}
+	return float64(fi.Size()) / 1024.0 / 1024.0
 }
 
 type Rect struct {

@@ -75,6 +75,9 @@ minArea = 90000  # 300 x 300 pixels = 1 x 1 inch
 # Tolerance for polygon approximation. This is a fraction of the perimeter length.
 contourEpsilon = 0.02
 
+templSize = 13
+searchSize = 29
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -93,7 +96,8 @@ def main():
     os.makedirs(outPdfRoot, exist_ok=True)
     pdfFiles = args.files
     pdfFiles = [fn for fn in pdfFiles if not derived(fn)]
-    pdfFiles.sort(key=lambda fn: (os.path.getsize(fn), fn))
+    pdfFiles.sort(key=lambda fn: (-os.path.getsize(fn), fn))
+    print("Processing %d files" % len(pdfFiles))
     for i, fn in enumerate(pdfFiles):
         print("%3d: %4.2f MB %s" % (i, os.path.getsize(fn)/1e6, fn))
     # assert False
@@ -128,11 +132,17 @@ def processPdfFile(pdfFile, start, end, needed, force):
         print("%s exists. skipping" % outPdfFile)
         return False
 
-    if not os.path.exists(outRoot):
+    if not os.path.exists(os.path.join(outRoot, "doc-001.png")):
         os.makedirs(outRoot, exist_ok=True)
-        retval = runGhostscript(pdfFile, outRoot)
+        retval = runGhostscript(pdfFile, outRoot, resample=1)
+        if retval != 0:
+            print("runGhostscript failed outRoot=%s retval=%d. skipping" % (outPdfFile, retval))
+            return False
         assert retval == 0
-    fileList = glob(os.path.join(outRoot, "doc-*.png"))
+    searchMask = os.path.join(outRoot, "doc-*.png")
+    print("searchMask=%s" % searchMask)
+    fileList = glob(searchMask)
+    fileList = [fn for fn in fileList if ".denoised.png" not in fn]
 
     print("fileList=%d %s" % (len(fileList), fileList))
     numPages = 0
@@ -151,6 +161,16 @@ def processPdfFile(pdfFile, start, end, needed, force):
 
         rects = processPngFile(outRoot, origFile, fileNum)
         rects = reduceRectDicts(rects)
+
+        # image = imread(origFile, as_gray=False)
+        # image = img_as_ubyte(image)
+        # denoisedFile = origFile + ".denoised.png"
+        # denoised = cv2.fastNlMeansDenoisingColored(image, None,
+        #                                     templateWindowSize=templSize,
+        #                                     searchWindowSize=searchSize)
+        # print("  denoised=%s" % desc(denoised))
+        # imsave(denoisedFile, denoised)
+        # pageRects[denoisedFile] = rects
         pageRects[origFile] = rects
         numPages += 1
 
@@ -186,8 +206,18 @@ def processPngFile(outRoot, origFile, fileNum):
     image = imread(origFile, as_gray=True)
     image = img_as_ubyte(image)
     print("  image=%s" % desc(image))
-    print("+" * 80)
-    entImageGray = entropy(image, entropyKernel)
+
+    if False:
+        denoised = cv2.fastNlMeansDenoising(image, None,
+                                                templateWindowSize=templSize,
+                                                searchWindowSize=searchSize)
+
+        print("  denoised=%s" % desc(denoised))
+        print("+" * 80)
+        entImageGray = entropy(denoised, entropyKernel)
+    else:
+        entImageGray = entropy(image, entropyKernel)
+
     print("entImageGray=%s" % desc(entImageGray))
 
     # entImageClipped is for display only
@@ -301,7 +331,7 @@ def pageNum(pngPath):
     return int(m.group(1)), True
 
 
-def runGhostscript(pdf, outputDir):
+def runGhostscript(pdf, outputDir, resample=1):
     """runGhostscript runs Ghostscript on file `pdf` to create file one png file per page in
         directory `outputDir`.
     """
@@ -312,7 +342,7 @@ def runGhostscript(pdf, outputDir):
            "-dSAFER",
            "-dBATCH",
            "-dNOPAUSE",
-           "-r%d" % rasterDPI,
+           "-r%d" % (rasterDPI * resample),
            "-sDEVICE=png16m",
            "-dTextAlphaBits=1",
            "-dGraphicsAlphaBits=1",
@@ -331,6 +361,22 @@ def runGhostscript(pdf, outputDir):
     print(" outputDir=%s" % outputDir)
     print("outputPath=%s" % outputPath)
     assert os.path.exists(outputDir)
+
+    if resample > 1:
+        scale = 1.0/resample
+        fileList = glob(os.path.join(outputDir, "doc-*.png"))
+        fileList = [fn for fn in fileList if ".denoised.png" not in fn]
+        for origFile in fileList:
+            image = imread(origFile, as_gray=False)
+            image = img_as_ubyte(image)
+            h, w = image.shape[:2]
+            print("original: w x h = %d x %d" % (w, h))
+            w = int(w * scale)
+            h = int(h * scale)
+            dim = (w, h)
+            print("  scaled: w x h = %d x %d" % (w, h))
+            image = cv2.resize(image, dim, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            imsave(origFile, image)
 
     return retval
 

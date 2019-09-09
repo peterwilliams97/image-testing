@@ -1,34 +1,18 @@
 from pprint import pprint
 from collections import defaultdict, namedtuple
 
-Rect = namedtuple('Rect', ['X0', 'Y0', 'X1', 'Y1'])
-
-
-def dictToRect(d):
-    return Rect(**d)
-
-
-def rectToDict(r):
-     return {k: r[i] for i, k in enumerate(Rect._fields)}
-
-
-if False:
-    print(Rect._fields)
-    d = {'X0': 10, 'Y0': 11, 'X1': 20, 'Y1': 21 }
-    r = Rect(**d)
-    print(r)
-    d2 = {k: r[i] for i, k in enumerate(Rect._fields)}
-    print(d2)
-    assert False
+"""
+    TODO: Use smart algorithms from
+        https://github.com/jilljenn/tryalgo
+        https://www.cs.tufts.edu/comp/163/notes05/seg_intersection_handout.pdf
+"""
 
 
 def reduceRectDicts(rectList):
     if not rectList:
         return rectList
-    assert rectList
-    R = [dictToRect(d) for d in rectList]
-    assert R
 
+    R = [dictToRect(d) for d in rectList]
     reducedR = reduceRects(R)
 
     numBefore = len(R)
@@ -47,6 +31,17 @@ def reduceRectDicts(rectList):
     return [rectToDict(r) for r in reducedR]
 
 
+Rect = namedtuple('Rect', ['X0', 'Y0', 'X1', 'Y1'])
+
+
+def dictToRect(d):
+    return Rect(**d)
+
+
+def rectToDict(r):
+     return {k: r[i] for i, k in enumerate(Rect._fields)}
+
+
 def reduceRects(R):
     """reduceRects reduces the list of possibly overlapping rectangles in `R` to a reasonably
         compact list of non-overlapping rectangles
@@ -61,12 +56,14 @@ def reduceRects(R):
 
 
 def mergeV(rects):
+    """Return `rects` with vertically adjacent rectangles with the same X coordinates merged
+    """
     byX = defaultdict(list)
     for r in rects:
         byX[r.X0].append(r)
-    X = sorted(byX)
+
     merged = []
-    for x in X:
+    for x in sorted(byX):
         xrects = byX[x]
         r0 = xrects[0]
         for r in xrects[1:]:
@@ -81,13 +78,14 @@ def mergeV(rects):
 
 
 def mergeH(rects):
+    """Return `rects` with horizontally adjacent rectangles with the same Y coordinates merged
+    """
     byY = defaultdict(list)
     for r in rects:
-        y1 = r[1]
         byY[r.Y0].append(r)
-    Y = sorted(byY)
+
     merged = []
-    for y in Y:
+    for y in sorted(byY):
         yrects = byY[y]
         r0 = yrects[0]
         for r in yrects[1:]:
@@ -99,7 +97,6 @@ def mergeH(rects):
                 r0 = r
         merged.append(r0)
     return merged
-
 
 
 def toNonOverapping(R):
@@ -125,6 +122,9 @@ def inRects(R, x, y):
     return any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in R)
 
 
+#
+# The remainder of this file is test cases.
+#
 R = [
     (0, 0, 2, 2),  # + 4   4
     (1, 1, 3, 3),  # x 3   7

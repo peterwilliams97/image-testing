@@ -28,13 +28,38 @@ def main():
     mask = os.path.join(outPdfRoot, "*.%s" % suffixMasked)
     pdfFiles = glob(mask)
     pdfFiles = [fn for fn in pdfFiles if testedPdf(fn) ]
-    pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng), ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
+
+    # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng), -ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
+    # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng),
+    #                               -ratio(fn, suffixJpg), -suffixMB(fn, None), fn))
+    pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng) <= 1.0,
+                                  ratio(fn, suffixPng) < 0.5,
+                                  -suffixMB(fn, None),
+                                  ratio(fn, suffixPng),
+                                  ratio(fn, suffixBgd),
+                                  fn))
+    # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixJpg), -ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
+    # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixJpg) * ratio(fn, suffixPng),
+    #                               -suffixMB(fn, None), fn))
+    # pdfFiles.sort(key=lambda fn: (ratio(fn, suffixBgd),
+    #                               -suffixMB(fn, None),
+    #                               -ratio(fn, suffixJpg),
+    #                               -ratio(fn, suffixPng),
+    #                               fn))
+    # pdfFiles.sort(key=lambda fn: (ratio(fn, suffixBgd),
+    #                               -ratio(fn, suffixPng),
+    #                               -ratio(fn, suffixJpg),
+    #                               -suffixMB(fn, None),
+    #                               fn))
+
     nCompressed = 0
     nSame = 0
     nExpanded = 0
+    lines = []
     for i, fn in enumerate(pdfFiles):
         size = suffixMB(fn, None)
         sizePng = suffixMB(fn, suffixPng)
+        sizeJpg = suffixMB(fn, suffixJpg)
         sizeBgd = suffixMB(fn, suffixBgd)
         if size < sizePng:
             nCompressed += 1
@@ -42,17 +67,19 @@ def main():
             nExpanded += 1
         else:
             nSame += 1
-        print("%6d: %4.2f (%4.2f) %5.2f MB [%s] %s" % (i, size/sizePng, sizeBgd/sizePng, size,
-          time.ctime(os.path.getmtime(fn)), fn))
+        lines.append("%6d: %4.2f %5.2f (%4.2f) %5.2f MB [%s] %s" % (i,
+            size/sizePng,  size/sizeJpg, sizeBgd/sizePng, size,
+            time.ctime(os.path.getmtime(fn)), fn))
 
-    print("    %s" % ("=" * 80))
     n = len(pdfFiles)
     if n == 0:
         return
 
-    print("    Compressed = %2d = %5.1f%%" % (nCompressed, 100.0 * nCompressed / n))
-    print("          Same = %2d = %5.1f%%" % (nSame, 100.0 * nSame / n))
-    print("      Expanded = %2d = %5.1f%%" % (nExpanded, 100.0 * nExpanded / n))
+    print("    Compressed = %4d = %5.1f%%" % (nCompressed, 100.0 * nCompressed / n))
+    print("          Same = %4d = %5.1f%%" % (nSame, 100.0 * nSame / n))
+    print("      Expanded = %4d = %5.1f%%" % (nExpanded, 100.0 * nExpanded / n))
+    for l in lines:
+        print(l)
 
 
 def ratio(filename, suffix):
