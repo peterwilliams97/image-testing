@@ -29,15 +29,20 @@ def main():
     pdfFiles = glob(mask)
     pdfFiles = [fn for fn in pdfFiles if testedPdf(fn) ]
 
+    pdfFiles.sort(key=lambda fn: (-suffixMB(fn, None), fn))
+
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng), -ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng),
     #                               -ratio(fn, suffixJpg), -suffixMB(fn, None), fn))
-    pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng) <= 1.0,
-                                  ratio(fn, suffixPng) < 0.5,
-                                  -suffixMB(fn, None),
-                                  ratio(fn, suffixPng),
-                                  ratio(fn, suffixBgd),
-                                  fn))
+
+    # Default
+    # pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng) <= 1.0,
+    #                               ratio(fn, suffixPng) < 0.5,
+    #                               -suffixMB(fn, None),
+    #                               ratio(fn, suffixPng),
+    #                               ratio(fn, suffixBgd),
+    #                               fn))
+
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixJpg), -ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixJpg) * ratio(fn, suffixPng),
     #                               -suffixMB(fn, None), fn))
@@ -55,18 +60,27 @@ def main():
     nCompressed = 0
     nSame = 0
     nExpanded = 0
+    szCompressed = 0
+    szSame = 0
+    szExpanded = 0
+
     lines = []
+    totalSize = 0.0
     for i, fn in enumerate(pdfFiles):
         size = suffixMB(fn, None)
         sizePng = suffixMB(fn, suffixPng)
         sizeJpg = suffixMB(fn, suffixJpg)
         sizeBgd = suffixMB(fn, suffixBgd)
+        totalSize += size
         if size < sizePng:
             nCompressed += 1
+            szCompressed += size
         elif size > sizePng:
             nExpanded += 1
+            szExpanded += size
         else:
             nSame += 1
+            szSame += size
         lines.append("%6d: %4.2f %5.2f (%4.2f) %5.2f MB [%s] %s" % (i,
             size/sizePng,  size/sizeJpg, sizeBgd/sizePng, size,
             time.ctime(os.path.getmtime(fn)), os.path.basename(fn)))
@@ -75,9 +89,10 @@ def main():
     if n == 0:
         return
 
-    print("    Compressed = %4d = %5.1f%%" % (nCompressed, 100.0 * nCompressed / n))
-    print("          Same = %4d = %5.1f%%" % (nSame, 100.0 * nSame / n))
-    print("      Expanded = %4d = %5.1f%%" % (nExpanded, 100.0 * nExpanded / n))
+    print("    Compressed = %4d = %5.1f%% = %6.2f MB" % (nCompressed, 100.0 * nCompressed / n, szCompressed))
+    print("          Same = %4d = %5.1f%% = %6.2f MB" % (nSame, 100.0 * nSame / n, szSame))
+    print("      Expanded = %4d = %5.1f%% = %6.2f MB" % (nExpanded, 100.0 * nExpanded / n, szExpanded))
+    print("         Total = %4d = %5.1f%% = %6.2f MB" % (len(pdfFiles), 100.0, totalSize))
     for l in lines:
         print(l)
 
