@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 """
    Compare directories of PDF files compressed by entropy.py
-   Ranking is by (mixture PDF file size) / (pure PNG file size)
+   Ranking is by (test PDF file size) / (reference file size)
+
+   e.g. python weigh.py pdf.output.ccitt pdf.output
 """
 import os
 from glob import glob
@@ -17,13 +19,17 @@ suffixPng = "unmasked.png.pdf"
 suffixJpg = "unmasked.jpg.pdf"
 suffixBgd = "bgd.pdf"
 
+usage = """Usage: python weigh.py <test directory> <reference directory>
+    Compare size of *.masked.pdf files in <test directory> to those in <reference directory>
+"""
+
 def main():
     # parser = argparse.ArgumentParser()
     # args = parser.parse_args()
     # pdfFiles = args.files
 
-    assert len(sys.argv) == 3, "Usage: python weigh.py <directory1> <directory2>"
-    outPdfRoot1, outPdfRoot2 = sys.argv[1:3]
+    assert len(sys.argv) == 3, usage
+    rootTest, rootRef = sys.argv[1:3]
 
     def directorize(fn):
         return os.path.dirname(os.path.join(fn, "xxx"))
@@ -31,7 +37,7 @@ def main():
     def matchFiles(outPdfRoot):
         mask = os.path.join(outPdfRoot, "*.%s" % suffixMasked)
         pdfFiles = glob(mask)
-        pdfFiles = [fn for fn in pdfFiles if testedPdf(fn)]
+        pdfFiles = [fn for fn in pdfFiles if segmentedPdf(fn)]
         return pdfFiles
 
     def baseFiles(pdfFiles):
@@ -41,61 +47,55 @@ def main():
         return [os.path.join(dirName, name) for name in baseNames]
 
     def sortKey(fn):
-        sz1 = fileSizeMB(os.path.join(outPdfRoot1, fn))
-        sz2 = fileSizeMB(os.path.join(outPdfRoot2, fn))
-        return sz2 / sz1
+        szTest = fileSizeMB(os.path.join(rootTest, fn))
+        szRef = fileSizeMB(os.path.join(rootRef, fn))
+        return -szTest / szRef, -szTest
 
-    outPdfRoot1 = directorize(outPdfRoot1)
-    outPdfRoot2 = directorize(outPdfRoot2)
-    pdfFiles1 = matchFiles(outPdfRoot1)
-    pdfFiles2 = matchFiles(outPdfRoot2)
-    commonFiles = sorted(baseFiles(pdfFiles1) & baseFiles(pdfFiles2), key=sortKey)
+    rootTest = directorize(rootTest)
+    rootRef = directorize(rootRef)
+    filesTest = matchFiles(rootTest)
+    filesRef = matchFiles(rootRef)
+    filesCommon = sorted(baseFiles(filesTest) & baseFiles(filesRef), key=sortKey)
 
-    pdfFiles1 = joinFiles(outPdfRoot1, commonFiles)
-    pdfFiles2 = joinFiles(outPdfRoot2, commonFiles)
+    filesTest = joinFiles(rootTest, filesCommon)
+    filesRef = joinFiles(rootRef, filesCommon)
 
-    totalSize1 = 0.0
-    totalSize2 = 0.0
+    totalSizeTest = 0.0
+    totalSizeRef = 0.0
     numContracted = 0
     numExpanded = 0
     lines = []
-    for i, fn in enumerate(commonFiles):
-        size1 = fileSizeMB(os.path.join(outPdfRoot1, fn))
-        size2 = fileSizeMB(os.path.join(outPdfRoot2, fn))
-        ratio = size1 / size2
-        totalSize1 += size1
-        totalSize2 += size2
+    for i, fn in enumerate(filesCommon):
+        sizeTest = fileSizeMB(os.path.join(rootTest, fn))
+        sizeRef = fileSizeMB(os.path.join(rootRef, fn))
+        ratio = sizeTest / sizeRef
+        totalSizeTest += sizeTest
+        totalSizeRef += sizeRef
         if ratio > 1.0:
             numExpanded += 1
         elif ratio < 1.0:
             numContracted += 1
-        lines.append("%6d: %5.2f MB %5.2f MB %5.1f%% %s" % (i, size1, size2, 100.0*ratio, fn))
+        lines.append("%6d: %5.2f MB %5.2f MB %5.1f%% %s" % (i, sizeTest, sizeRef, 100.0*ratio, fn))
 
-    n = len(commonFiles)
+    n = len(filesCommon)
     if n == 0:
         return
 
     numSame = n - numContracted - numExpanded
-    totalRatio = totalSize1 / totalSize2
+    totalRatio = totalSizeTest / totalSizeRef
 
     print("Number expanded:   %3d %5.1f%%" % (numExpanded, 100.0 * numExpanded / n))
     print("Number same:       %3d %5.1f%%" % (numSame, 100.0 * numSame / n))
     print("Number contracted: %3d %5.1f%%" % (numContracted, 100.0 * numContracted/ n))
     print("Total:             %3d %5.1f%%" % (n, 100.0))
-    print("%15s vs %s (reference). How much smaller is %s?" % (outPdfRoot1, outPdfRoot2, outPdfRoot1))
-    print("Total : %5.2f MB %5.2f MB %5.1f%%" %  (totalSize1, totalSize2, 100.0*totalRatio))
+    print("%15s vs %s (reference). How much smaller is %s?" % (rootTest, rootRef, rootTest))
+    print("Total : %5.2f MB %5.2f MB %5.1f%%" %  (totalSizeTest, totalSizeRef, 100.0*totalRatio))
     for l in lines:
         print(l)
 
 
-def ratio(filename, suffix):
-    other = otherPdf(filename, suffix)
-    size = fileSizeMB(filename)
-    otherSize = fileSizeMB(other)
-    return size / otherSize
-
-
-def testedPdf(filename):
+def segmentedPdf(filename):
+    """Return True is `filename` is a segmented PDF created by segment.go."""
     pngPdf = otherPdf(filename, suffixPng)
     jpgPdf = otherPdf(filename, suffixJpg)
     bgdPdf = otherPdf(filename, suffixBgd)

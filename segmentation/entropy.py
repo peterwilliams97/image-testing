@@ -85,7 +85,9 @@ def main():
                         help="first page in PDF")
     parser.add_argument("-e", "--end", default=-1, type=int,
                         help="last page in PDF")
-    parser.add_argument("-n", "--needed", default=1, type=int,
+    parser.add_argument("-n", "--number", default=-1, type=int,
+                        help="Max number of PDF files to process")
+    parser.add_argument("-m", "--needed", default=1, type=int,
                         help="min number of pages required")
     parser.add_argument("files", nargs="+",
                         help="input files; glob and @ expansion performed")
@@ -96,7 +98,9 @@ def main():
     os.makedirs(outPdfRoot, exist_ok=True)
     pdfFiles = args.files
     pdfFiles = [fn for fn in pdfFiles if not derived(fn)]
-    pdfFiles.sort(key=lambda fn: (-os.path.getsize(fn), fn))
+    pdfFiles.sort(key=lambda fn: (os.path.getsize(fn), fn))
+    if args.number > 0:
+        pdfFiles = pdfFiles[:args.number]
     print("Processing %d files" % len(pdfFiles))
     for i, fn in enumerate(pdfFiles):
         print("%3d: %4.2f MB %s" % (i, os.path.getsize(fn)/1e6, fn))

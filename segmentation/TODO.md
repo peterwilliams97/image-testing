@@ -18,6 +18,7 @@ TODO - Entropy
 * BUG: Missing edges of high entropy area in HistoryOfRome.pdf page 1
 * /Users/peter/testdata/misc/THE BEHAVIORAL AND BRAIN SCIENCES (1984) 7, 173-221.pdf should compress with JBIG2
 * PaperCutMF-Top-10-Reasons.masked.pdf won't open in Adobe Reader
+* CCCITT indexed colorspaces https://blog.idrsolutions.com/2013/03/understanding-the-pdf-file-format-filter-and-decodeparms-objects-for-a-pdf-image/
 
 IDEAS
 -----

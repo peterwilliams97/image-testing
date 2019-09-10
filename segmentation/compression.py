@@ -27,21 +27,27 @@ def main():
 
     mask = os.path.join(outPdfRoot, "*.%s" % suffixMasked)
     pdfFiles = glob(mask)
-    pdfFiles = [fn for fn in pdfFiles if testedPdf(fn) ]
+    pdfFiles = [fn for fn in pdfFiles if segmentedPdf(fn) ]
 
-    pdfFiles.sort(key=lambda fn: (-suffixMB(fn, None), fn))
-
+    # pdfFiles.sort(key=lambda fn: (-suffixMB(fn, None), fn))
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng), -ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
+
+    # 2nd default
+    # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng),
+    #                               -suffixMB(fn, None),
+    #                               -ratio(fn, suffixBgd),
+    #                               fn))
+
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixPng),
     #                               -ratio(fn, suffixJpg), -suffixMB(fn, None), fn))
 
     # Default
-    # pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng) <= 1.0,
-    #                               ratio(fn, suffixPng) < 0.5,
-    #                               -suffixMB(fn, None),
-    #                               ratio(fn, suffixPng),
-    #                               ratio(fn, suffixBgd),
-    #                               fn))
+    pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng) <= 1.0,
+                                  ratio(fn, suffixPng) < 0.5,
+                                  -suffixMB(fn, None),
+                                  ratio(fn, suffixPng),
+                                  ratio(fn, suffixBgd),
+                                  fn))
 
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixJpg), -ratio(fn, suffixBgd), -suffixMB(fn, None), fn))
     # pdfFiles.sort(key=lambda fn: (-ratio(fn, suffixJpg) * ratio(fn, suffixPng),
@@ -104,7 +110,8 @@ def ratio(filename, suffix):
     return size / otherSize
 
 
-def testedPdf(filename):
+def segmentedPdf(filename):
+    """Return True is `filename` is a segmented PDF created by segment.go."""
     pngPdf = otherPdf(filename, suffixPng)
     jpgPdf = otherPdf(filename, suffixJpg)
     bgdPdf = otherPdf(filename, suffixBgd)

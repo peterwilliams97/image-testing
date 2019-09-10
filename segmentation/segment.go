@@ -43,16 +43,19 @@ type imageEncoding int
 
 const (
 	encodeFlate imageEncoding = iota
+	encodeCCITT
 	encodeDCT
 )
 
 var (
 	encodingName = map[imageEncoding]string{
 		encodeFlate: "png",
+		encodeCCITT: "ccitt",
 		encodeDCT:   "jpg",
 	}
 	allEncodings = []imageEncoding{
 		encodeFlate,
+		encodeCCITT,
 		encodeDCT,
 	}
 )
@@ -87,6 +90,7 @@ const (
 	imageDir    = "images"    // Where image segments are stored.
 	fgdEncoding = encodeDCT   // Encoding used for foreground image fragments.
 	bgdEncoding = encodeFlate // Encoding used for background image fragments.
+	binEncoding = encodeCCITT // Encoding used for bilevel image fragments.
 	jpegQuality = 25          // Quality setting for DCT images
 	dilation    = 2           // Knockouts are reduced by this number of pixexl to hide seams.
 )
@@ -180,7 +184,7 @@ func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode c
 	bgdPath := changeDirExt(pagePath, ".bgd.png")
 	common.Log.Info("addImageToPage: pagePath=%q rectList=%v mode=%#v ", pagePath, rectList, mode)
 
-	img, err := loadImage(pagePath)
+	img, err := loadGoImage(pagePath)
 	if err != nil {
 		return err
 	}
@@ -194,31 +198,38 @@ func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode c
 
 	fgdList := makeForegroundList(img, rectList)
 	bgd := makeBackground(img, dilate(rectList, -dilation), mode == createBgd)
-	err = saveImage(bgdPath, bgd, bgdEncoding)
+	err = saveGoImage(bgdPath, bgd, bgdEncoding)
 	if err != nil {
 		panic(err)
 	}
 
 	makePrintHistogram("background", bgd)
-	if histogramQuanitizable(bgd) {
-		crushedPath := bgdPath + ".crushed.png"
-		err = crushFile(bgdPath, crushedPath, 3, png.BestCompression)
-		if err != nil {
-			panic(err)
-		}
-		// TODO: Figure out how to work with paletted PNGs !@#$
-		// bgdPath = crushedPath
-		// bgd, err := loadImage(bgdPath)
-		// if err != nil {
-		// 	panic(err)
-		// }
-		// makePrintHistogram("crushed", bgd)
-	}
+	isBilevel := histogramBilevel(bgd)
+	isBilevel = false
+	// // if isBilevel {
+	// // 	panic("Bilevel")
+	// // }
+	// if !isBilevel {
+	// 	if histogramQuanitizable(bgd) {
+	// 		crushedPath := bgdPath + ".crushed.png"
+	// 		err = crushFile(bgdPath, crushedPath, 3, png.BestCompression)
+	// 		if err != nil {
+	// 			panic(err)
+	// 		}
+	// 		// TODO: Figure out how to work with paletted PNGs !@#$
+	// 		// bgdPath = crushedPath
+	// 		// bgd, err := loadGoImage(bgdPath)
+	// 		// if err != nil {
+	// 		// 	panic(err)
+	// 		// }
+	// 		// makePrintHistogram("crushed", bgd)
+	// 	}
+	// }
 
 	var fgdPathList []string
 	for i, fgd := range fgdList {
 		fgdPath := makeFgdPath(pagePath, i)
-		err = saveImage(fgdPath, fgd, fgdEncoding)
+		err = saveGoImage(fgdPath, fgd, fgdEncoding)
 		if err != nil {
 			return err
 		}
@@ -228,7 +239,7 @@ func addImageToPage(c *creator.Creator, pagePath string, rectList []Rect, mode c
 	doBgd := mode != createFgd
 	doFgd := mode != createBgd
 	common.Log.Info("mode=%v=%#q", mode, modeName[mode])
-	return overlayImagesOnPage(c, bgdPath, rectList, fgdPathList, w, h, doBgd, doFgd)
+	return overlayImagesOnPage(c, bgdPath, rectList, fgdPathList, w, h, doBgd, doFgd, isBilevel)
 }
 
 const (
@@ -273,9 +284,9 @@ func computeScale(width, height, w, h float64) (scale, xOfs, yOfs float64) {
 // dimensions `w` x `h`) and write the resulting single page `width` x `height` PDF to `outPath`.
 // is the width of the image in PDF document dimensions (height/width ratio is maintained).
 func overlayImagesOnPage(c *creator.Creator, bgdPath string, rectList []Rect, fgdPathList []string,
-	w, h int, doBgd, doFgd bool) error {
+	w, h int, doBgd, doFgd, isBilevel bool) error {
 	scale, xOfs, yOfs := computeScale(width, height, float64(w), float64(h))
-	common.Log.Info("### overlayImagesOnPage: doBgd=%v doFgd=%v", doBgd, doFgd)
+	common.Log.Info("### overlayImagesOnPage: doBgd=%t doFgd=%t isBilevel=%t", doBgd, doFgd, isBilevel)
 	common.Log.Info("   scale=%.3f width=%.1f height=%.1f w=%d h=%d",
 		scale, width, height, w, h)
 	common.Log.Info("    scale * w x h = %.1f x%.1f", scale*float64(w), scale*float64(h))
@@ -284,7 +295,11 @@ func overlayImagesOnPage(c *creator.Creator, bgdPath string, rectList []Rect, fg
 	if doBgd {
 		// Draw the background image.
 		r := Rect{X0: 0, Y0: 0, X1: w, Y1: h}
-		if err := addImage(c, bgdPath, bgdEncoding, r, scale, xOfs, yOfs); err != nil {
+		enc := bgdEncoding
+		if isBilevel {
+			enc = binEncoding
+		}
+		if err := addImage(c, bgdPath, enc, r, scale, xOfs, yOfs); err != nil {
 			return err
 		}
 	}
@@ -318,14 +333,19 @@ func placeImageOnPage(c *creator.Creator, bgdPath string, w, h int, enc imageEnc
 
 func makeEncoder(enc imageEncoding, w, h int) core.StreamEncoder {
 	switch enc {
+	case encodeCCITT:
+		encoder := core.NewCCITTFaxEncoder()
+		encoder.Columns = w
+		encoder.Rows = h
+		return encoder
 	case encodeFlate:
 		return core.NewFlateEncoder()
 	case encodeDCT:
-		dctEnc := core.NewDCTEncoder()
-		dctEnc.Width = w
-		dctEnc.Height = h
-		dctEnc.Quality = jpegQuality
-		return dctEnc
+		encoder := core.NewDCTEncoder()
+		encoder.Width = w
+		encoder.Height = h
+		encoder.Quality = jpegQuality
+		return encoder
 	}
 	panic(fmt.Errorf("unknown imageEncoding %#v", enc))
 }
@@ -334,18 +354,38 @@ func makeEncoder(enc imageEncoding, w, h int) core.StreamEncoder {
 func addImage(c *creator.Creator, imgPath string, enc imageEncoding,
 	r Rect, scale, xOfs, yOfs float64) error {
 	common.Log.Info("addImage: imgPath=%q r=%v", imgPath, r)
+
+	var goW, goH int
+	{
+		goImg, err := loadGoImage(imgPath)
+		if err != nil {
+			return err
+		}
+		bounds := goImg.Bounds()
+		goW, goH = bounds.Max.X, bounds.Max.Y
+
+		if enc == encodeCCITT {
+			grayPath := changeExtOnly(imgPath, ".gray.png")
+			grayImg := makeGrayImage(goImg)
+			err := saveGoImage(grayPath, grayImg, enc)
+			if err != nil {
+				return err
+			}
+			imgPath = grayPath
+
+		}
+	}
+
 	img, err := c.NewImageFromFile(imgPath)
 	if err != nil {
 		return err
 	}
 
-	goImg, err := loadImage(imgPath)
-	if err != nil {
-		return err
-	}
-	bounds := goImg.Bounds()
-	encoder := makeEncoder(enc, bounds.Max.X, bounds.Max.Y)
+	encoder := makeEncoder(enc, goW, goH)
 	img.SetEncoder(encoder)
+	if enc == encodeCCITT {
+		img.SetBitsPerComponent(1)
+	}
 
 	x, y := float64(r.X0)*scale+xOfs, float64(r.Y0)*scale+yOfs
 	w, h := float64(r.X1-r.X0)*scale, float64(r.Y1-r.Y0)*scale // +1? !@#$
@@ -354,6 +394,7 @@ func addImage(c *creator.Creator, imgPath string, enc imageEncoding,
 	img.SetPos(x, y)
 	img.SetWidth(w)
 	img.SetHeight(h)
+	common.Log.Info("encoder=%v", encoder)
 	return c.Draw(img)
 }
 
@@ -417,6 +458,19 @@ func histogramQuanitizable(img image.Image) bool {
 	return quanitizable(n, histo, maxColors, threshold)
 }
 
+// histogramBilevel returns true if `img` is an approximately bilevel image. Our current definition
+// of "approximateley bilevel" is that at least 99% of the pixels are in 2 colors or less.
+func histogramBilevel(img image.Image) bool {
+	n, histo := histogram(img)
+	maxColors := 2
+	threshold := 0.99
+	bilevel := quanitizable(n, histo, maxColors, threshold)
+	common.Log.Info("histogramBilevel: bilevel=%t img=%v", bilevel, img.Bounds())
+	return bilevel
+}
+
+// histogram returns the number of pixels and map of {rbga: number} of the number of pixels with
+// each rbga value.
 func histogram(imgIn image.Image) (int, map[uint32]int) {
 	img := imgIn.(*image.RGBA)
 	bounds := img.Bounds()
@@ -435,6 +489,10 @@ func histogram(imgIn image.Image) (int, map[uint32]int) {
 	return w * h, histo
 }
 
+// quantizable returns true if the `maxColors` most common pixel colors cover `n` x `threshold`
+// pixels in `histo`.
+// If qualitizable returns true then a palette of `maxColors` can be used to approximate the image
+// n and histo were computed from
 func quanitizable(n int, histo map[uint32]int, maxColors int, threshold float64) bool {
 	var keys []uint32
 	for u := range histo {
@@ -586,6 +644,7 @@ func fileSizeMB(filename string) float64 {
 	return float64(fi.Size()) / 1024.0 / 1024.0
 }
 
+// Rect is a rectangle that is deserialized from JSON files.
 type Rect struct {
 	X0, Y0, X1, Y1 int
 }
@@ -677,23 +736,6 @@ func drawPixels(img *image.Alpha, px, py, pw, ph uint, fill bool) {
 	}
 }
 
-// saveImage saves image `img` to file `filename` with encoding `enc`.
-func saveImage(filename string, img image.Image, enc imageEncoding) error {
-	out, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	switch enc {
-	case encodeFlate:
-		return png.Encode(out, img)
-	case encodeDCT:
-		return jpeg.Encode(out, img, nil)
-	}
-	return fmt.Errorf("unsupported encoding %#v", enc)
-}
-
 func makeFgdPath(outPath string, i int) string {
 	return changeDirExt(outPath, fmt.Sprintf("-%03d.fgd.png", i))
 }
@@ -709,7 +751,25 @@ func changeExtOnly(filename, newExt string) string {
 	return filename[:len(filename)-len(ext)] + newExt
 }
 
-func loadImage(pagePath string) (image.Image, error) {
+// saveGoImage saves Go image `img` to file `filename` with imageEncoding `enc`.
+func saveGoImage(filename string, img image.Image, enc imageEncoding) error {
+	out, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	switch enc {
+	case encodeFlate, encodeCCITT:
+		return png.Encode(out, img)
+	case encodeDCT:
+		return jpeg.Encode(out, img, nil)
+	}
+	return fmt.Errorf("unsupported encoding %#v", enc)
+}
+
+// loadGoImage loads the image in file `pagePath` and returns it as a Go image.
+func loadGoImage(pagePath string) (image.Image, error) {
 	imgfile, err := os.Open(pagePath)
 	if err != nil {
 		return nil, err
@@ -718,6 +778,41 @@ func loadImage(pagePath string) (image.Image, error) {
 
 	img, _, err := image.Decode(imgfile)
 	return img, err
+}
+
+func makeGrayImage(img image.Image) image.Image {
+	common.Log.Info("makeGrayImage: %v", img.Bounds())
+	x0, x1 := img.Bounds().Min.X, img.Bounds().Max.X
+	y0, y1 := img.Bounds().Min.Y, img.Bounds().Max.Y
+
+	grayImg := image.NewGray(img.Bounds())
+
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			grayImg.Set(x, y, img.At(x, y))
+			g := grayImg.GrayAt(x, y).Y
+			if g < 127 {
+				g = 0
+			} else {
+				g = 255
+			}
+			grayImg.SetGray(x, y, color.Gray{g})
+		}
+	}
+
+	// for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+	// 	for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+	// 		g := img.GrayAt(x,y)
+	// 		if g < 127 {
+	// 			g = 0
+	// 		} else {
+	// 			g = 255
+	// 		}
+	// 		grayImg.SetGray(x, y, g)
+	// 	}
+	// }
+
+	return grayImg
 }
 
 // makeUsage updates flag.Usage to include usage message `msg`.
