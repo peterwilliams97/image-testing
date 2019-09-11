@@ -43,6 +43,7 @@ def main():
 
     # Default
     pdfFiles.sort(key=lambda fn: (ratio(fn, suffixPng) <= 1.0,
+                                  ratio(fn, suffixPng) < 0.9,
                                   ratio(fn, suffixPng) < 0.5,
                                   -suffixMB(fn, None),
                                   ratio(fn, suffixPng),
@@ -87,18 +88,21 @@ def main():
         else:
             nSame += 1
             szSame += size
-        lines.append("%6d: %4.2f %5.2f (%4.2f) %5.2f MB [%s] %s" % (i,
+        # lines.append("%6d: %4.2f %5.2f (%4.2f) %5.2f MB [%s] %s" % (i,
+        #     size/sizePng,  size/sizeJpg, sizeBgd/sizePng, size,
+        #     time.ctime(os.path.getmtime(fn)), os.path.basename(fn)))
+        lines.append("%6d: %4.2f %5.2f (%4.2f) %5.2f MB %s" % (i,
             size/sizePng,  size/sizeJpg, sizeBgd/sizePng, size,
-            time.ctime(os.path.getmtime(fn)), os.path.basename(fn)))
+            os.path.basename(fn)))
 
     n = len(pdfFiles)
     if n == 0:
         return
 
-    print("    Compressed = %4d = %5.1f%% = %6.2f MB" % (nCompressed, 100.0 * nCompressed / n, szCompressed))
-    print("          Same = %4d = %5.1f%% = %6.2f MB" % (nSame, 100.0 * nSame / n, szSame))
-    print("      Expanded = %4d = %5.1f%% = %6.2f MB" % (nExpanded, 100.0 * nExpanded / n, szExpanded))
-    print("         Total = %4d = %5.1f%% = %6.2f MB" % (len(pdfFiles), 100.0, totalSize))
+    print("    Compressed = %4d = %5.1f%% = %7.2f MB" % (nCompressed, 100.0 * nCompressed / n, szCompressed))
+    print("          Same = %4d = %5.1f%% = %7.2f MB" % (nSame, 100.0 * nSame / n, szSame))
+    print("      Expanded = %4d = %5.1f%% = %7.2f MB" % (nExpanded, 100.0 * nExpanded / n, szExpanded))
+    print("         Total = %4d = %5.1f%% = %7.2f MB" % (len(pdfFiles), 100.0, totalSize))
     for l in lines:
         print(l)
 
