@@ -38,11 +38,99 @@ pprinter = PrettyPrinter(stream=sys.stderr)
 
 dpi = 72
 
+
+def main():
+    if sys.platform == "win32":
+        import msvcrt
+        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+
+    if len(sys.argv) == 2:
+        sym = sys.argv[1] + '.sym'
+        pages = glob.glob(sys.argv[1] + '.[0-9]*')
+    elif len(sys.argv) == 1:
+        sym = 'symboltable'
+        pages = glob.glob('page-*')
+    else:
+        usage(sys.argv[0], "wrong number of args!")
+
+    if not os.path.exists(sym):
+        usage(sys.argv[0], "symbol table %s not found!" % sym)
+    elif len(pages) == 0:
+        usage(sys.argv[0], "no pages found!")
+
+    jig2Main(sym, pages)
+
+
+def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
+    """Build a PDF from JBIG2 symbol table file `symbolPath` and page files `pagefiles`.
+    """
+    print("** symbolPath=%s" % symbolPath, file=sys.stderr)
+    print("** pagefiles= %d: %s" % (len(pagefiles), pagefiles), file=sys.stderr)
+
+    doc = Doc()
+    doc.add_object(Obj({'Type': '/Catalog', 'Outlines': ref(2), 'Pages': ref(3)}))  # 1
+    # Lose Outlines !@#$
+    doc.add_object(Obj({'Type': '/Outlines', 'Count': '0'}))                        # 2
+    # Combine next 2 lines !@#$
+    pages = Obj({'Type': '/Pages'})                                                 # 3
+    doc.add_object(pages)
+    symd = doc.add_object(Obj({}, readFile(symbolPath)))
+    page_objs = []
+
+    pagefiles.sort()
+
+    for i, pageFile in enumerate(pagefiles):
+        print("** page %d: %s" % (i, pageFile), file=sys.stderr)
+        try:
+            contents = readFile(pageFile)
+        except IOError:
+            print("error reading page file %s" % p, file=sys.stderr)
+            continue
+        # Big endian. Network byte order
+        width, height, xres, yres = struct.unpack('>IIII', contents[11:27])
+
+        # print('** (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
+
+        if xres == 0:
+            xres = dpi
+        if yres == 0:
+            yres = dpi
+
+        widthPts = float(width * 72) / xres
+        heightPts = float(height * 72) / yres
+
+        xobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+                    'Width': str(width),
+                    'Height': str(height),
+                    'ColorSpace': '/DeviceGray',
+                    'BitsPerComponent': '1',
+                    'Filter': '/JBIG2Decode',
+                    'DecodeParms':' << /JBIG2Globals %d 0 R >>' % symd.id},
+                    contents)
+        # scale image to widthPts x heightPts points
+        contents = Obj({}, b'q %f 0 0 %f 0 0 cm /Im1 Do Q' % (widthPts, heightPts))
+        # Lose the procsets? !@#$
+        resources = Obj({'ProcSet': '[/PDF /ImageB]',
+                         'XObject': '<< /Im1 %d 0 R >>' % xobj.id})
+        page = Obj({'Type': '/Page', 'Parent': '3 0 R',
+                    'MediaBox': '[ 0 0 %f %f ]' % (widthPts, heightPts),
+                    'Contents': ref(contents.id),
+                    'Resources': ref(resources.id)})
+        [doc.add_object(x) for x in [xobj, contents, resources, page]]
+        page_objs.append(page)
+
+        pages.d.d[b'Count'] = b'%d' % len(page_objs)
+        pages.d.d[b'Kids'] = b'[' + b' '.join([ref(x.id) for x in page_objs]) + b']'
+
+    sys.stdout.buffer.write(bytes(doc))
+
+
 class Ref:
   def __init__(self, x):
     self.x = x
   def __bytes__(self):
-    return b"%d 0 R" % self.x
+    return b'%d 0 R' % self.x
+
 
 class Dict:
   def __init__(self, values = {}):
@@ -112,6 +200,7 @@ class Obj:
     def __str__(self):
         assert False
 
+
 class Doc:
   def __init__(self):
     self.objs = []
@@ -155,85 +244,20 @@ class Doc:
 
     return b'\n'.join(a)
 
+
 def ref(x):
     return b'%d 0 R' % x
-
-def main(symboltable='symboltable', pagefiles=glob.glob('page-*')):
-    print("** symboltable=%s" % symboltable, file=sys.stderr)
-    print("** pagefiles= %d: %s" % (len(pagefiles), pagefiles), file=sys.stderr)
-    doc = Doc()
-    doc.add_object(Obj({'Type' : '/Catalog', 'Outlines' : ref(2), 'Pages' : ref(3)}))
-    doc.add_object(Obj({'Type' : '/Outlines', 'Count': '0'}))
-    pages = Obj({'Type' : '/Pages'})
-    doc.add_object(pages)
-    symd = doc.add_object(Obj({}, open(symboltable, 'rb').read()))
-    page_objs = []
-
-    pagefiles.sort()
-
-    for i, p in enumerate(pagefiles):
-        print("** page %d: %s" % (i, p), file=sys.stderr)
-        try:
-            contents = open(p, mode='rb').read()
-        except IOError:
-            sys.stderr.write("error reading page file %s\n"% p)
-            continue
-        (width, height, xres, yres) = struct.unpack('>IIII', contents[11:27])
-
-        # print('** (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
-
-        if xres == 0:
-            xres = dpi
-        if yres == 0:
-            yres = dpi
-
-        xobj = Obj({'Type': '/XObject', 'Subtype': '/Image', 'Width':
-                str(width), 'Height': str(height), 'ColorSpace': '/DeviceGray',
-                'BitsPerComponent': '1', 'Filter': '/JBIG2Decode', 'DecodeParms':
-                ' << /JBIG2Globals %d 0 R >>' % symd.id}, contents)
-        contents = Obj({}, b'q %f 0 0 %f 0 0 cm /Im1 Do Q' % (float(width * 72) / xres, float(height * 72) / yres))
-        resources = Obj({'ProcSet': '[/PDF /ImageB]',
-                'XObject': '<< /Im1 %d 0 R >>' % xobj.id})
-        page = Obj({'Type': '/Page', 'Parent': '3 0 R',
-                'MediaBox': '[ 0 0 %f %f ]' % (float(width * 72) / xres, float(height * 72) / yres),
-                'Contents': ref(contents.id),
-                'Resources': ref(resources.id)})
-        [doc.add_object(x) for x in [xobj, contents, resources, page]]
-        page_objs.append(page)
-
-        pages.d.d[b'Count'] = b'%d' % len(page_objs)
-        pages.d.d[b'Kids'] = b'[' + b' '.join([ref(x.id) for x in page_objs]) + b']'
-
-    sys.stdout.buffer.write(bytes(doc))
 
 
 def usage(script, msg):
     if msg:
-        sys.stderr.write("%s: %s\n"% (script, msg))
-        sys.stderr.write("Usage: %s [file_basename] > out.pdf\n"% script)
+        sys.stderr.write("%s: %s\n" % (script, msg))
+        sys.stderr.write("Usage: %s [file_basename] > out.pdf\n" % script)
     sys.exit(1)
 
 
-def myMain():
-    if sys.platform == "win32":
-        import msvcrt
-        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
-
-    if len(sys.argv) == 2:
-        sym = sys.argv[1] + '.sym'
-        pages = glob.glob(sys.argv[1] + '.[0-9]*')
-    elif len(sys.argv) == 1:
-        sym = 'symboltable'
-        pages = glob.glob('page-*')
-    else:
-        usage(sys.argv[0], "wrong number of args!")
-
-    if not os.path.exists(sym):
-        usage(sys.argv[0], "symbol table %s not found!"% sym)
-    elif len(pages) == 0:
-        usage(sys.argv[0], "no pages found!")
-
-    main(sym, pages)
+def readFile(filename):
+    return open(filename, 'rb').read()
 
 
 def pprint(msg):
@@ -243,4 +267,4 @@ def pprint(msg):
 
 
 if __name__ == '__main__':
-    myMain()
+    main()
