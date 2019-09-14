@@ -83,19 +83,14 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
     print("** pagefiles= %d: %s" % (len(pagefiles), pagefiles), file=sys.stderr)
 
     doc = Doc()
-    catalog = Obj({'Type': '/Catalog', 'Outlines': ref(2), 'Pages': ref(3)})
-    doc.add_catalog(catalog)            # 1
-    # Lose Outlines !@#$
-    outlines = Obj({'Type': '/Outlines', 'Count': '0'})
-    doc.add_object(outlines)           # 2
-    # Combine next 2 lines !@#$
-    pages = Obj({'Type': '/Pages'})    # 3
+    pages = Obj({'Type': '/Pages'})
     doc.add_object(pages)
+    catalog = Obj({'Type': '/Catalog',  'Pages': ref(pages.id)})
+    doc.add_catalog(catalog)
     symd = doc.add_object(Obj({}, readFile(symbolPath)))
+
     page_objs = []
-
     pagefiles.sort()
-
     for i, pageFile in enumerate(pagefiles):
         bgdFile = pageFile + '.png'
         jpgFile = pageFile + '.jpg'
@@ -112,10 +107,10 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         else:
             bgdContents = None
 
-        contents = readFile(pageFile)
+        fgdContents = readFile(pageFile)
 
         # Big endian. Network byte order
-        width, height, xres, yres = struct.unpack('>IIII', contents[11:27])
+        width, height, xres, yres = struct.unpack('>IIII', fgdContents[11:27])
 
         print('** fgd (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
 
@@ -135,8 +130,8 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
                         'BitsPerComponent': '8',
                         'Filter': '/DCTDecode'},
                         bgdContents)
-            bgdDo = b'/Im%d Do\n' % bgdXobj.id
-            bgdRef = b'/Im%d %d 0 R' % (bgdXobj.id, bgdXobj.id)
+            bgdDo = b'/Im%d Do' % bgdXobj.id
+            bgdRef = b'/Im%d %s' % (bgdXobj.id, ref(bgdXobj.id))
         else:
             bgdXobj = None
             bgdDo = b''
@@ -150,38 +145,28 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
                     'BlackIs1': 'false',
                     'BitsPerComponent': '1',
                     'Filter': '/JBIG2Decode',
-                    'DecodeParms':' << /JBIG2Globals %d 0 R >>' % symd.id},
-                    contents)
-        fgdDo = b'/Im%d Do\n' % fgdXobj.id
-        fgdRef = b'/Im%d %d 0 R' % (fgdXobj.id, fgdXobj.id)
+                    'DecodeParms': b'<< /JBIG2Globals %s >>' % symd.ref()},
+                    fgdContents)
+        fgdDo = b'/Im%d Do' % fgdXobj.id
+        fgdRef = b'/Im%d %s' % (fgdXobj.id, fgdXobj.ref())
 
         # scale image to widthPts x heightPts points
-        scale = b'%f 0 0 % f 0 0 cm' % (widthPts, heightPts)
+        scale = b'%f 0 0 %f 0 0 cm' % (widthPts, heightPts)
 
-        contents = Obj({},  b'q %s %s %s Q' % (scale, bgdDo, fgdDo))
-        # Lose the procsets? !@#$
-
-        resources = Obj({'ProcSet': '[/PDF /ImageB]',
-                         'XObject': b'<<%s%s>>' % (bgdRef, fgdRef)
-                        })
-        page = Obj({'Type': '/Page', 'Parent': '%d 0 R' % pages.id,
-                    'MediaBox': '[ 0 0 %f %f ]' % (widthPts, heightPts),
-                    'Contents': ref(contents.id),
-                    'Resources': ref(resources.id)})
-        [doc.add_object(x) for x in [bgdXobj, fgdXobj, contents, resources, page] if x is not None]
+        cmds = Obj({},  b'q %s %s %s Q' % (scale, bgdDo, fgdDo))
+        resources = Obj({'XObject': b'<<%s%s>>' % (bgdRef, fgdRef)})
+        page = Obj({'Type': '/Page', 'Parent': pages.ref(),
+                    'MediaBox': '[0 0 %f %f]' % (widthPts, heightPts),
+                    'Contents': cmds.ref(),
+                    'Resources': resources.ref()
+                    })
+        doc.add_objects([bgdXobj, fgdXobj, cmds, resources, page])
         page_objs.append(page)
 
         pages.d.d[b'Count'] = b'%d' % len(page_objs)
-        pages.d.d[b'Kids'] = b'[' + b' '.join([ref(x.id) for x in page_objs]) + b']'
+        pages.d.d[b'Kids'] = b'[%s]' % b' '.join(o.ref() for o in page_objs)
 
     sys.stdout.buffer.write(bytes(doc))
-
-
-class Ref:
-  def __init__(self, x):
-    self.x = x
-  def __bytes__(self):
-    return b'%d 0 R' % self.x
 
 
 class Dict:
@@ -193,20 +178,10 @@ class Dict:
         if isinstance(v, str):
             v = v.encode('ascii')
         self.d[k] = v
-        assert not isinstance(k, str), (k, v)
-        assert not isinstance(v, str), (k, v)
-    for k, v in self.d.items():
-        assert not isinstance(k, str), (k, v)
-        assert not isinstance(v, str), (k, v)
-
-    # self.d = {k.encode('ascii'): v.encode('ascii') for k, v in values.items()}
-    # self.d.update(values)
 
   def __bytes__(self):
     s = [b'<< ']
     for k, v in self.d.items():
-        assert not isinstance(k, str), (k, v)
-        assert not isinstance(v, str), (k, v)
         s.append(b'/%s ' % k)
         s.append(v)
         s.append(b'\n')
@@ -214,8 +189,6 @@ class Dict:
 
     return b''.join(s)
 
-  def __str__(self):
-      assert False
 
 global_next_id = 1
 
@@ -240,17 +213,12 @@ class Obj:
       s.append(self.stream)
       #  print("** stream=%s %d %s" % (type(self.stream), len(self.stream), self.stream[:10]), file=sys.stderr)
       s.append(b'\nendstream\n')
-    s.append(b'endobj\n')
-
-    # print("** %s %d %s" % (type(s), len(s), [type(k) for k in s]), file=sys.stderr)
-
-    for i, k in enumerate(s):
-        assert not isinstance(k, str), (i, k)
+    s.append(b'endobj')
 
     return b''.join(s)
 
-    def __str__(self):
-        assert False
+  def ref(self):
+      return ref(self.id)
 
 
 class Doc:
@@ -258,6 +226,11 @@ class Doc:
     self.objs = []
     self.pages = []
     self.catalogId = -1
+
+  def add_objects(self, objs):
+    for o in objs:
+        if o is not None:
+            self.add_object(o)
 
   def add_object(self, o):
     self.objs.append(o)
@@ -277,7 +250,6 @@ class Doc:
     offsets = []
 
     def add(x):
-        assert not isinstance(x, str), x
         a.append(x)
         j[0] += len(x) + 1
 
@@ -294,7 +266,7 @@ class Doc:
         a.append(b'%010d 00000 n ' % o)
     a.append(b'')
     a.append(b'trailer')
-    a.append(b'<< /Size %d\n/Root %d 0 R >>' % (len(offsets) + 1, self.catalogId))
+    a.append(b'<</Size %d\n/Root %s>>' % (len(offsets) + 1, ref(self.catalogId)))
     a.append(b'startxref')
     a.append(bytes(xrefstart))
     a.append(b'%%EOF')
