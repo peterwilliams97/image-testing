@@ -42,8 +42,6 @@ pprinter = PrettyPrinter(stream=sys.stderr)
 # Run ./jbig2 -s -p <other options> image1.jpeg image1.jpeg ...
 # python pdf.py output > out.pdf
 
-dpi = 72
-
 
 def main():
     if sys.platform == "win32":
@@ -114,11 +112,6 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
 
         print('** fgd (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
 
-        if xres == 0:
-            xres = dpi
-        if yres == 0:
-            yres = dpi
-
         widthPts = float(width * 72) / xres
         heightPts = float(height * 72) / yres
 
@@ -173,36 +166,28 @@ class Dict:
   def __init__(self, values = {}):
     self.d = {}
     for k, v in values.items():
-        if isinstance(k, str):
-            k = k.encode('ascii')
-        if isinstance(v, str):
-            v = v.encode('ascii')
+        if isinstance(k, str): k = k.encode('ascii')
+        if isinstance(v, str): v = v.encode('ascii')
         self.d[k] = v
 
   def __bytes__(self):
     s = [b'<< ']
     for k, v in self.d.items():
-        s.append(b'/%s ' % k)
-        s.append(v)
-        s.append(b'\n')
+        s.append(b'/%s %s \n' % (k, v))
     s.append(b'>>\n')
-
     return b''.join(s)
 
 
-global_next_id = 1
-
 class Obj:
   next_id = 1
-  def __init__(self, d = {}, stream = None):
-    global global_next_id
 
+  def __init__(self, d = {}, stream = None):
     if stream is not None:
       d[b'Length'] = b'%d' % (len(stream))
     self.d = Dict(d)
     self.stream = stream
-    self.id = global_next_id
-    global_next_id += 1
+    self.id = Obj.next_id
+    Obj.next_id += 1
     pprint(self.d.d)
 
   def __bytes__(self):
@@ -211,10 +196,8 @@ class Obj:
     if self.stream is not None:
       s.append(b'stream\n')
       s.append(self.stream)
-      #  print("** stream=%s %d %s" % (type(self.stream), len(self.stream), self.stream[:10]), file=sys.stderr)
       s.append(b'\nendstream\n')
     s.append(b'endobj')
-
     return b''.join(s)
 
   def ref(self):
@@ -244,21 +227,23 @@ class Doc:
     self.pages.append(o)
     return self.add_object(o)
 
+  pos = 0
+
   def __bytes__(self):
     a = []
-    j = [0]
+    Doc.pos = 0
     offsets = []
 
     def add(x):
         a.append(x)
-        j[0] += len(x) + 1
+        Doc.pos += len(x) + 1
 
     add(b'%PDF-1.4')
     for o in self.objs:
-      offsets.append(j[0])
+      offsets.append(Doc.pos)
       add(b'%d 0 obj' % o.id)
       add(bytes(o))
-    xrefstart = j[0]
+    xrefstart = Doc.pos
     a.append(b'xref')
     a.append(b'0 %d' % (len(offsets) + 1))
     a.append(b'0000000000 65535 f ')
