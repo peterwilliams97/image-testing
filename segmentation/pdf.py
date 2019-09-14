@@ -18,8 +18,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# JBIG2 Encoder
-# https://github.com/agl/jbig2enc
+# JBIG2 Encoder https://github.com/agl/jbig2enc
+
+"""
+  Typical usage:
+    jbig2 -s -S -p pdf.output.reference/hobbes/doc-001.png
+    python pdf.py output > a.pdf
+"""
 
 import sys
 import re
@@ -54,6 +59,7 @@ def main():
     else:
         usage(sys.argv[0], "wrong number of args!")
 
+    print("** argv=%d %s" % (len(sys.argv), sys.argv[1:]), file=sys.stderr)
     if not os.path.exists(sym):
         usage(sys.argv[0], "symbol table %s not found!" % sym)
     elif len(pages) == 0:
@@ -94,14 +100,17 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         bgdFile = pageFile + '.png'
         jpgFile = pageFile + '.jpg'
         print("** page %d: %s" % (i, pageFile), file=sys.stderr)
-        assert os.path.exists(bgdFile), bgdFile
+        # assert os.path.exists(bgdFile), bgdFile
 
-        bgd = cv2.imread(bgdFile)
-        assert bgd is not None, bgdFile
-        cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
-        bgdContents = readFile(jpgFile)
-        h, w = bgd.shape[:2]
-        print('** bgd (width, height)', [w, h], file=sys.stderr)
+        if os.path.exists(bgdFile):
+            bgd = cv2.imread(bgdFile)
+            assert bgd is not None, bgdFile
+            cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
+            bgdContents = readFile(jpgFile)
+            h, w = bgd.shape[:2]
+            print('** bgd (width, height)', [w, h], file=sys.stderr)
+        else:
+            bgdContents = None
 
         contents = readFile(pageFile)
 
@@ -118,13 +127,20 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         widthPts = float(width * 72) / xres
         heightPts = float(height * 72) / yres
 
-        bgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
-                       'Width': str(w),
-                       'Height': str(h),
-                       'ColorSpace': '/DeviceRGB',
-                       'BitsPerComponent': '8',
-                       'Filter': '/DCTDecode'},
-                      bgdContents)
+        if bgdContents is not None:
+            bgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+                        'Width': str(w),
+                        'Height': str(h),
+                        'ColorSpace': '/DeviceRGB',
+                        'BitsPerComponent': '8',
+                        'Filter': '/DCTDecode'},
+                        bgdContents)
+            bgdDo = b'/Im%d Do\n' % bgdXobj.id
+            bgdRef = b'/Im%d %d 0 R' % (bgdXobj.id, bgdXobj.id)
+        else:
+            bgdXobj = None
+            bgdDo = b''
+            bgdRef = b''
 
         fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
                     'Width': str(width),
@@ -136,23 +152,23 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
                     'Filter': '/JBIG2Decode',
                     'DecodeParms':' << /JBIG2Globals %d 0 R >>' % symd.id},
                     contents)
+        fgdDo = b'/Im%d Do\n' % fgdXobj.id
+        fgdRef = b'/Im%d %d 0 R' % (fgdXobj.id, fgdXobj.id)
+
         # scale image to widthPts x heightPts points
-        contents = Obj({}, b'q %f 0 0 %f 0 0 cm /Im%d Do /Im%d Do Q' %
-                       (widthPts, heightPts, bgdXobj.id, fgdXobj.id,))
+        scale = b'%f 0 0 % f 0 0 cm' % (widthPts, heightPts)
+
+        contents = Obj({},  b'q %s %s %s Q' % (scale, bgdDo, fgdDo))
         # Lose the procsets? !@#$
+
         resources = Obj({'ProcSet': '[/PDF /ImageB]',
-                         'XObject': '''<<
-                         /Im%d %d 0 R
-                         /Im%d %d 0 R
-                         >>''' % (
-                             bgdXobj.id, bgdXobj.id,
-                             fgdXobj.id, fgdXobj.id)
+                         'XObject': b'<<%s%s>>' % (bgdRef, fgdRef)
                         })
         page = Obj({'Type': '/Page', 'Parent': '%d 0 R' % pages.id,
                     'MediaBox': '[ 0 0 %f %f ]' % (widthPts, heightPts),
                     'Contents': ref(contents.id),
                     'Resources': ref(resources.id)})
-        [doc.add_object(x) for x in [bgdXobj, fgdXobj, contents, resources, page]]
+        [doc.add_object(x) for x in [bgdXobj, fgdXobj, contents, resources, page] if x is not None]
         page_objs.append(page)
 
         pages.d.d[b'Count'] = b'%d' % len(page_objs)
