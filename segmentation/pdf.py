@@ -26,6 +26,7 @@ import re
 import struct
 import glob
 import os
+import cv2
 from pprint import PrettyPrinter
 
 pprinter = PrettyPrinter(stream=sys.stderr)
@@ -58,7 +59,15 @@ def main():
     elif len(pages) == 0:
         usage(sys.argv[0], "no pages found!")
 
+    pages = [p for p in pages if isOutput(p)]
     jig2Main(sym, pages)
+
+
+OUTPUT = re.compile(r'\.\d+$')
+
+
+def isOutput(p):
+    return OUTPUT.search(p) is not None
 
 
 def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
@@ -68,11 +77,13 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
     print("** pagefiles= %d: %s" % (len(pagefiles), pagefiles), file=sys.stderr)
 
     doc = Doc()
-    doc.add_object(Obj({'Type': '/Catalog', 'Outlines': ref(2), 'Pages': ref(3)}))  # 1
+    catalog = Obj({'Type': '/Catalog', 'Outlines': ref(2), 'Pages': ref(3)})
+    doc.add_catalog(catalog)            # 1
     # Lose Outlines !@#$
-    doc.add_object(Obj({'Type': '/Outlines', 'Count': '0'}))                        # 2
+    outlines = Obj({'Type': '/Outlines', 'Count': '0'})
+    doc.add_object(outlines)           # 2
     # Combine next 2 lines !@#$
-    pages = Obj({'Type': '/Pages'})                                                 # 3
+    pages = Obj({'Type': '/Pages'})    # 3
     doc.add_object(pages)
     symd = doc.add_object(Obj({}, readFile(symbolPath)))
     page_objs = []
@@ -80,16 +91,24 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
     pagefiles.sort()
 
     for i, pageFile in enumerate(pagefiles):
+        bgdFile = pageFile + '.png'
+        jpgFile = pageFile + '.jpg'
         print("** page %d: %s" % (i, pageFile), file=sys.stderr)
-        try:
-            contents = readFile(pageFile)
-        except IOError:
-            print("error reading page file %s" % p, file=sys.stderr)
-            continue
+        assert os.path.exists(bgdFile), bgdFile
+
+        bgd = cv2.imread(bgdFile)
+        assert bgd is not None, bgdFile
+        cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
+        bgdContents = readFile(jpgFile)
+        h, w = bgd.shape[:2]
+        print('** bgd (width, height)', [w, h], file=sys.stderr)
+
+        contents = readFile(pageFile)
+
         # Big endian. Network byte order
         width, height, xres, yres = struct.unpack('>IIII', contents[11:27])
 
-        # print('** (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
+        print('** fgd (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
 
         if xres == 0:
             xres = dpi
@@ -99,24 +118,41 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         widthPts = float(width * 72) / xres
         heightPts = float(height * 72) / yres
 
-        xobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+        bgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+                       'Width': str(w),
+                       'Height': str(h),
+                       'ColorSpace': '/DeviceRGB',
+                       'BitsPerComponent': '8',
+                       'Filter': '/DCTDecode'},
+                      bgdContents)
+
+        fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
                     'Width': str(width),
                     'Height': str(height),
                     'ColorSpace': '/DeviceGray',
+                    'ImageMask': 'true',
+                    'BlackIs1': 'false',
                     'BitsPerComponent': '1',
                     'Filter': '/JBIG2Decode',
                     'DecodeParms':' << /JBIG2Globals %d 0 R >>' % symd.id},
                     contents)
         # scale image to widthPts x heightPts points
-        contents = Obj({}, b'q %f 0 0 %f 0 0 cm /Im1 Do Q' % (widthPts, heightPts))
+        contents = Obj({}, b'q %f 0 0 %f 0 0 cm /Im%d Do /Im%d Do Q' %
+                       (widthPts, heightPts, bgdXobj.id, fgdXobj.id,))
         # Lose the procsets? !@#$
         resources = Obj({'ProcSet': '[/PDF /ImageB]',
-                         'XObject': '<< /Im1 %d 0 R >>' % xobj.id})
-        page = Obj({'Type': '/Page', 'Parent': '3 0 R',
+                         'XObject': '''<<
+                         /Im%d %d 0 R
+                         /Im%d %d 0 R
+                         >>''' % (
+                             bgdXobj.id, bgdXobj.id,
+                             fgdXobj.id, fgdXobj.id)
+                        })
+        page = Obj({'Type': '/Page', 'Parent': '%d 0 R' % pages.id,
                     'MediaBox': '[ 0 0 %f %f ]' % (widthPts, heightPts),
                     'Contents': ref(contents.id),
                     'Resources': ref(resources.id)})
-        [doc.add_object(x) for x in [xobj, contents, resources, page]]
+        [doc.add_object(x) for x in [bgdXobj, fgdXobj, contents, resources, page]]
         page_objs.append(page)
 
         pages.d.d[b'Count'] = b'%d' % len(page_objs)
@@ -205,10 +241,15 @@ class Doc:
   def __init__(self):
     self.objs = []
     self.pages = []
+    self.catalogId = -1
 
   def add_object(self, o):
     self.objs.append(o)
     return o
+
+  def add_catalog(self, o):
+    self.catalogId = o.id
+    return self.add_object(o)
 
   def add_page(self, o):
     self.pages.append(o)
@@ -237,7 +278,7 @@ class Doc:
         a.append(b'%010d 00000 n ' % o)
     a.append(b'')
     a.append(b'trailer')
-    a.append(b'<< /Size %d\n/Root 1 0 R >>' % (len(offsets) + 1))
+    a.append(b'<< /Size %d\n/Root %d 0 R >>' % (len(offsets) + 1, self.catalogId))
     a.append(b'startxref')
     a.append(bytes(xrefstart))
     a.append(b'%%EOF')
@@ -257,7 +298,11 @@ def usage(script, msg):
 
 
 def readFile(filename):
-    return open(filename, 'rb').read()
+    try:
+        return open(filename, 'rb').read()
+    except IOError:
+        print("error reading file %s" % filename, file=sys.stderr)
+        raise
 
 
 def pprint(msg):
