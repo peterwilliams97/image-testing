@@ -33,6 +33,7 @@ import glob
 import os
 import cv2
 import subprocess
+import argparse
 from pprint import PrettyPrinter
 
 pprinter = PrettyPrinter(stream=sys.stderr)
@@ -43,33 +44,49 @@ pprinter = PrettyPrinter(stream=sys.stderr)
 # Run ./jbig2 -s -p <other options> image1.jpeg image1.jpeg ...
 # python pdf.py output > out.pdf
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-b", "--background", action="store_true",
+                        help="remove background")
+    parser.add_argument("-f", "--foreground", action="store_true",
+                        help="remove foreground")
+    parser.add_argument("files", nargs="+",
+                        help="input files; glob and @ expansion performed")
+    parser.add_argument("-o", "--force",
+                        help="force processing of PDF file")
+
+    args = parser.parse_args()
+    files = args.files
+    doBgd = not args.background
+    doFgd = not args.foreground
+
+    for inDir in files:
+        # processDirectory(inDir, doBgd, doFgd)
+        processDirectory(inDir, True, True)
+        processDirectory(inDir, True, False)
+        processDirectory(inDir, False, True)
+
 
 dataDir = 'jbig2.data'
 
-def main():
-    if sys.platform == "win32":
-        import msvcrt
-        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
 
-    for inDir in sys.argv[1:]:
-        processDirectory(inDir)
-
-
-OUTPUT = re.compile(r'\.\d+$')
-
-
-def isOutput(p):
-    return OUTPUT.search(p) is not None
-
-
-def processDirectory(inDir):
+def processDirectory(inDir, doBgd, doFgd):
     """Create a layered PDF file from the rasters in `inDir`
         Temp files are stored in `jbigDir`
     """
+
     base = os.path.basename(inDir)
     base, _ = os.path.splitext(base)
     jbigDir = os.path.join(dataDir, base)
-    sym = os.path.join(jbigDir, 'output.sym')
+    symbolPath = os.path.join(jbigDir, 'output.sym')
+    if doBgd and doFgd:
+        pdfPath = base + '.connected.pdf'
+    elif doBgd:
+        pdfPath = base + '.connected.bgd.pdf'
+    elif doFgd:
+        pdfPath = base + '.connected.fgd.pdf'
+    else:
+        assert False, "nothing to do"
 
     def jbigPath(i):
         return os.path.join(jbigDir, 'output.%04d' % i)
@@ -78,9 +95,11 @@ def processDirectory(inDir):
     rasterList = sorted(glob.glob(mask))
     rasterPage = {fn: jbigPath(i) for i, fn in enumerate(rasterList)}
 
-    print("** processDirectory: inDir=%s" % inDir, file=sys.stderr)
+    print("** processDirectory: inDir=%s doBgd=%s doFgd=%s pdfPath=%s" % (
+          inDir, doBgd, doFgd, pdfPath), file=sys.stderr)
     print("** processDirectory: base=%s" % base, file=sys.stderr)
     print("** processDirectory: jbigDir= %s" % jbigDir, file=sys.stderr)
+
     os.makedirs(jbigDir, exist_ok=True)
     here = os.getcwd()
     try:
@@ -97,23 +116,14 @@ def processDirectory(inDir):
     finally:
         os.chdir(here)
 
-
-    # out = os.path.join(jbigDir, 'output')
-    # rasterPage =
-    # sym = base + '.sym'
-    # pages = glob.glob(base + '.[0-9]*')
-    # pages = [p for p in pages if isOutput(p)]
-    pages = sorted(rasterPage.values())
+    pagefiles = sorted(rasterPage.values())
     print("** processDirectory: jbigDir=%s" % jbigDir, file=sys.stderr)
-    if not os.path.exists(sym):
-        usage(sys.argv[0], "symbol table %s not found!" % sym)
-    elif len(pages) == 0:
-        usage(sys.argv[0], "no pages found!")
 
-    jig2Main(sym, pages)
+    doc = buildPDF(symbolPath, pagefiles, doBgd, doFgd)
+    writeFile(pdfPath, bytes(doc))
 
 
-def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
+def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
     """Build a PDF from JBIG2 symbol table file `symbolPath` and page files `pagefiles`.
     """
     print("** symbolPath=%s" % symbolPath, file=sys.stderr)
@@ -132,12 +142,10 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         bgdFile = pageFile + '.png'
         jpgFile = pageFile + '.jpg'
         print("** page %d: %s" % (i, pageFile), file=sys.stderr)
-        # assert os.path.exists(bgdFile), bgdFile
 
         if os.path.exists(bgdFile):
             bgd = cv2.imread(bgdFile)
-            assert bgd is not None, bgdFile
-            cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
             bgdContents = readFile(jpgFile)
             h, w = bgd.shape[:2]
             print('** bgd (width, height)', [w, h], file=sys.stderr)
@@ -146,7 +154,7 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
 
         fgdContents = readFile(pageFile)
 
-        # Big endian. Network byte order
+        # Big endian (Network byte order) 4 byte integers.
         width, height, xres, yres = struct.unpack('>IIII', fgdContents[11:27])
 
         print('** fgd (width, height, xres, yres)', [width, height, xres, yres], file=sys.stderr)
@@ -154,7 +162,10 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         widthPts = float(width * 72) / xres
         heightPts = float(height * 72) / yres
 
-        if bgdContents is not None:
+        bgdIm = b'/ImBgd%d' % (i + 1)
+        fgdIm = b'/ImFgd%d' % (i + 1)
+
+        if doBgd and bgdContents is not None:
             bgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
                         'Width': str(w),
                         'Height': str(h),
@@ -162,25 +173,30 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
                         'BitsPerComponent': '8',
                         'Filter': '/DCTDecode'},
                         bgdContents)
-            bgdDo = b'/Im%d Do' % bgdXobj.id
-            bgdRef = b'/Im%d %s' % (bgdXobj.id, ref(bgdXobj.id))
+            bgdDo = b'%s Do' % bgdIm
+            bgdRef = b'%s %s ' % (bgdIm, bgdXobj.ref())
         else:
             bgdXobj = None
             bgdDo = b''
             bgdRef = b''
 
-        fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
-                    'Width': str(width),
-                    'Height': str(height),
-                    'ColorSpace': '/DeviceGray',
-                    'ImageMask': 'true',
-                    'BlackIs1': 'false',
-                    'BitsPerComponent': '1',
-                    'Filter': '/JBIG2Decode',
-                    'DecodeParms': b'<< /JBIG2Globals %s >>' % symd.ref()},
-                    fgdContents)
-        fgdDo = b'/Im%d Do' % fgdXobj.id
-        fgdRef = b'/Im%d %s' % (fgdXobj.id, fgdXobj.ref())
+        if doFgd:
+            fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+                        'Width': str(width),
+                        'Height': str(height),
+                        'ColorSpace': '/DeviceGray',
+                        'ImageMask': 'true',
+                        'BlackIs1': 'false',
+                        'BitsPerComponent': '1',
+                        'Filter': '/JBIG2Decode',
+                        'DecodeParms': b'<< /JBIG2Globals %s >>' % symd.ref()},
+                        fgdContents)
+            fgdDo = b'%s Do' % fgdIm
+            fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
+        else:
+            fgdXobj = None
+            fgdDo = b''
+            fgdRef = b''
 
         # scale image to widthPts x heightPts points
         scale = b'%f 0 0 %f 0 0 cm' % (widthPts, heightPts)
@@ -198,49 +214,7 @@ def jig2Main(symbolPath='symboltable', pagefiles=glob.glob('page-*')):
         pages.d.d[b'Count'] = b'%d' % len(page_objs)
         pages.d.d[b'Kids'] = b'[%s]' % b' '.join(o.ref() for o in page_objs)
 
-    sys.stdout.buffer.write(bytes(doc))
-
-
-class Dict:
-  def __init__(self, values = {}):
-    self.d = {}
-    for k, v in values.items():
-        if isinstance(k, str): k = k.encode('ascii')
-        if isinstance(v, str): v = v.encode('ascii')
-        self.d[k] = v
-
-  def __bytes__(self):
-    s = [b'<< ']
-    for k, v in self.d.items():
-        s.append(b'/%s %s \n' % (k, v))
-    s.append(b'>>\n')
-    return b''.join(s)
-
-
-class Obj:
-  next_id = 1
-
-  def __init__(self, d = {}, stream = None):
-    if stream is not None:
-      d[b'Length'] = b'%d' % (len(stream))
-    self.d = Dict(d)
-    self.stream = stream
-    self.id = Obj.next_id
-    Obj.next_id += 1
-    pprint(self.d.d)
-
-  def __bytes__(self):
-    s = []
-    s.append(bytes(self.d))
-    if self.stream is not None:
-      s.append(b'stream\n')
-      s.append(self.stream)
-      s.append(b'\nendstream\n')
-    s.append(b'endobj')
-    return b''.join(s)
-
-  def ref(self):
-      return ref(self.id)
+    return doc
 
 
 class Doc:
@@ -291,7 +265,8 @@ class Doc:
         a.append(b'%010d 00000 n ' % o)
     a.append(b'')
     a.append(b'trailer')
-    a.append(b'<</Size %d\n/Root %s>>' % (len(offsets) + 1, ref(self.catalogId)))
+    a.append(b'<</Size %d\n/Root %s>>' %
+             (len(offsets) + 1, ref(self.catalogId)))
     a.append(b'startxref')
     a.append(bytes(xrefstart))
     a.append(b'%%EOF')
@@ -299,30 +274,89 @@ class Doc:
     return b'\n'.join(a)
 
 
+class Dict:
+  def __init__(self, values = {}):
+    self.d = {}
+    for k, v in values.items():
+        if isinstance(k, str): k = k.encode('ascii')
+        if isinstance(v, str): v = v.encode('ascii')
+        self.d[k] = v
+
+  def __bytes__(self):
+    s = [b'<< ']
+    for k, v in self.d.items():
+        s.append(b'/%s %s \n' % (k, v))
+    s.append(b'>>\n')
+    return b''.join(s)
+
+
+class Obj:
+  next_id = 1
+
+  def __init__(self, d = {}, stream = None):
+    if stream is not None:
+      d[b'Length'] = b'%d' % (len(stream))
+    self.d = Dict(d)
+    self.stream = stream
+    self.id = Obj.next_id
+    Obj.next_id += 1
+    pprint(self.d.d)
+
+  def __bytes__(self):
+    s = []
+    s.append(bytes(self.d))
+    if self.stream is not None:
+      s.append(b'stream\n')
+      s.append(self.stream)
+      s.append(b'\nendstream\n')
+    s.append(b'endobj')
+    return b''.join(s)
+
+  def ref(self):
+      return ref(self.id)
+
+
 def ref(i):
     """ref returns a string with a reference to object number `i`"""
     return b'%d 0 R' % i
 
 
-def usage(script, msg):
-    if msg:
-        sys.stderr.write("%s: %s\n" % (script, msg))
-        sys.stderr.write("Usage: %s [file_basename] > out.pdf\n" % script)
-    sys.exit(1)
-
-
 def readFile(filename):
     try:
-        return open(filename, 'rb').read()
+        with open(filename, 'rb') as f:
+            return f.read()
     except IOError:
         print("error reading file %s" % filename, file=sys.stderr)
         raise
 
 
+def writeFile(filename, obj):
+    try:
+        with open(filename, 'wb') as f:
+            return f.write(obj)
+    except IOError:
+        print("error writing file %s" % filename, file=sys.stderr)
+        raise
+
 def pprint(msg):
     """Pretty print `msg` to stderr."""
     return
     pprinter.pprint(msg)
+
+
+def usage(script, msg):
+    if msg:
+        print("%s: %s\n" % (script, msg), file=sys.stderr)
+        print("Usage: %s [file_basename] > out.pdf\n" % script, file=sys.stderr)
+    sys.exit(1)
+
+
+# OUTPUT = re.compile(r'\.\d+$')
+
+
+# def isOutput(p):
+#     return OUTPUT.search(p) is not None
+
 
 
 if __name__ == '__main__':
