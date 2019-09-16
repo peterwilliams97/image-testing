@@ -63,11 +63,14 @@ def main():
     for inDir in files:
         # processDirectory(inDir, doBgd, doFgd)
         processDirectory(inDir, True, True)
-        processDirectory(inDir, True, False)
-        processDirectory(inDir, False, True)
+        # processDirectory(inDir, True, False)
+        # processDirectory(inDir, False, True)
 
 
 dataDir = 'jbig2.data'
+here = os.getcwd()
+prog = os.path.join(here, 'jbig2')
+assert os.path.exists(prog), prog
 
 
 def processDirectory(inDir, doBgd, doFgd):
@@ -101,15 +104,12 @@ def processDirectory(inDir, doBgd, doFgd):
     print("** processDirectory: jbigDir= %s" % jbigDir, file=sys.stderr)
 
     os.makedirs(jbigDir, exist_ok=True)
-    here = os.getcwd()
     try:
         os.chdir(jbigDir)
         print("** cwd=%s" % os.getcwd())
-        # assert False
 
         #  jbig2 -s -S -p pdf.output.reference/AIPopularPress1985/*.png
-        cmd = [os.path.join(here, 'jbig2'),
-               '-s', '-S', '-p', '-a'] + rasterList
+        cmd = [prog, '-s', '-S', '-p', '-a'] + rasterList
         p = subprocess.Popen(cmd, shell=False)
         retval = p.wait()
         assert retval == 0, (retval, ' '.join(cmd))
@@ -252,6 +252,13 @@ class Doc:
         a.append(x)
         Doc.pos += len(x) + 1
 
+    self.objs.sort(key=lambda o: (o.stream is not None,
+                                  (not o.stream.endswith(b'Do Q')) if o.stream is not None else True,
+                                  b'Pages' not in o.d.d,
+                                  b'Kids' not in o.d.d,
+                                  o.d.d.get(b'Type', b'Z'),
+                                  ))
+
     add(b'%PDF-1.4')
     for o in self.objs:
       offsets.append(Doc.pos)
@@ -265,8 +272,7 @@ class Doc:
         a.append(b'%010d 00000 n ' % o)
     a.append(b'')
     a.append(b'trailer')
-    a.append(b'<</Size %d\n/Root %s>>' %
-             (len(offsets) + 1, ref(self.catalogId)))
+    a.append(b'<</Size %d\n/Root %s>>' % (len(offsets) + 1, ref(self.catalogId)))
     a.append(b'startxref')
     a.append(bytes(xrefstart))
     a.append(b'%%EOF')
@@ -274,33 +280,16 @@ class Doc:
     return b'\n'.join(a)
 
 
-class Dict:
-  def __init__(self, values = {}):
-    self.d = {}
-    for k, v in values.items():
-        if isinstance(k, str): k = k.encode('ascii')
-        if isinstance(v, str): v = v.encode('ascii')
-        self.d[k] = v
-
-  def __bytes__(self):
-    s = [b'<< ']
-    for k, v in self.d.items():
-        s.append(b'/%s %s \n' % (k, v))
-    s.append(b'>>\n')
-    return b''.join(s)
-
-
 class Obj:
   next_id = 1
 
-  def __init__(self, d = {}, stream = None):
+  def __init__(self, d={}, stream=None):
     if stream is not None:
       d[b'Length'] = b'%d' % (len(stream))
     self.d = Dict(d)
     self.stream = stream
     self.id = Obj.next_id
     Obj.next_id += 1
-    pprint(self.d.d)
 
   def __bytes__(self):
     s = []
@@ -314,6 +303,24 @@ class Obj:
 
   def ref(self):
       return ref(self.id)
+
+
+class Dict:
+  def __init__(self, values={}):
+    self.d = {}
+    for k, v in values.items():
+        if isinstance(k, str):
+            k = k.encode('ascii')
+        if isinstance(v, str):
+            v = v.encode('ascii')
+        self.d[k] = v
+
+  def __bytes__(self):
+    s = [b'<<']
+    for k, v in self.d.items():
+        s.append(b'/%s %s\n' % (k, v))
+    s.append(b'>>\n')
+    return b''.join(s)
 
 
 def ref(i):
