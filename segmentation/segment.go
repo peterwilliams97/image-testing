@@ -1,5 +1,5 @@
 //
-// Segment images then combine the segments in a PDF file.
+// Segment images then combines the segments in a PDF file.
 // Another program will create a JSON file with segmentation instructions. This program reads the
 // JSON file, segments the images referenced in the JSON file, encodes rectangle enclosed segements
 // as DCT, encoded the rest of the image as Flate then combines the images in a PDF file.

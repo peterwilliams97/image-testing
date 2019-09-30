@@ -74,6 +74,8 @@ type ImageMark struct {
 	Filter            string  // GetFilterName()
 	Width, Height     int     // Width and height of image
 	X, Y, W, H, Theta float64 // Location and size on page
+	ColorComponents   int
+	BitsPerComponent  int
 	Lossy             bool
 	Mask              *core.PdfObjectReference
 	MaskOf            *core.PdfObjectReference
@@ -216,11 +218,18 @@ func (imgMark ImageMark) addImage(c *creator.Creator, goImg image.Image) error {
 	// if enc == encodeCCITT || enc == encodeJBIG2 {
 	// 	img.SetBitsPerComponent(1)
 	// }
-	img, err := c.NewImageFromGoImage(goImg)
+	img, err := c.NewImageFromGoImageMask(goImg, nil)
 	if err != nil {
 		return err
 	}
-	img.SetEncoder(encoder)
+	if imgMark.BitsPerComponent == 1 {
+		img.SetBitsPerComponent(1)
+		ccittEncoder := core.NewCCITTFaxEncoder()
+		ccittEncoder.Columns = int(img.Width())
+		img.SetEncoder(ccittEncoder)
+	} else {
+		img.SetEncoder(encoder)
+	}
 
 	img.SetPos(imgMark.X, imgMark.Y)
 	img.SetWidth(imgMark.W)
