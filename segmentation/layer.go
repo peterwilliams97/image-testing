@@ -23,8 +23,6 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/jpeg"
-	"image/png"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -35,50 +33,25 @@ import (
 	"github.com/unidoc/unipdf/v3/model"
 )
 
-// Encoding types
-type imageEncoding int
-
-const (
-	encodeFlate imageEncoding = iota
-	encodeCCITT
-	encodeDCT
-	encodeJBIG2
-)
-
-var (
-	encodingName = map[imageEncoding]string{
-		encodeFlate: "png",
-		encodeCCITT: "ccitt",
-		encodeDCT:   "jpg",
-		encodeJBIG2: "jbig2",
-	}
-	allEncodings = []imageEncoding{
-		encodeFlate,
-		encodeCCITT,
-		encodeDCT,
-		encodeJBIG2,
-	}
-)
-
 // Default settings
 const (
 	imageDir    = "layered.images"
 	jpegQuality = 25 // Quality setting for DCT images
 )
 
+type CoreImage struct {
+	core.PdfObjectReference
+	ImagePath        string // We don't need imagePath and Image
+	Filter           string // core.StreamEncoder
+	ColorComponents  int
+	BitsPerComponent int
+	Lossy            bool
+}
 type ImageMark struct {
-	*core.PdfObjectReference
-	*core.PdfObjectDictionary
-	// *model.Image
-	ImagePath         string  // We don't need imagePath and Image
-	Filter            string  // GetFilterName()
-	Width, Height     int     // Width and height of image
-	X, Y, W, H, Theta float64 // Location and size on page
-	ColorComponents   int
-	BitsPerComponent  int
-	Lossy             bool
-	Mask              *core.PdfObjectReference
-	MaskOf            *core.PdfObjectReference
+	CoreImage                   // Main image
+	MaskImage         CoreImage // Optional image mask
+	Width, Height     int       // Width and height of image
+	X, Y, W, H, Theta float64   // Location and size on page
 	Name              string
 }
 
@@ -109,7 +82,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
 }
 
 // makePdf makes a PDF file from the instructions in JSON file `jsonPath`.
@@ -130,6 +102,7 @@ func makePdf(jsonPath string) error {
 	if err != nil {
 		return err
 	}
+	common.Log.Info("doc=%+v", doc)
 	common.Log.Info("makePdf: %d pages", len(doc.Pages))
 
 	c := creator.New()
@@ -151,7 +124,6 @@ func makePdf(jsonPath string) error {
 }
 
 func (pgMark PageMark) makePage(c *creator.Creator) error {
-	// for _, imgMark := range pgMark.Images {
 	page := model.NewPdfPage()
 	mediaBox := model.PdfRectangle{Urx: pgMark.W, Ury: pgMark.H}
 	page.MediaBox = &mediaBox
@@ -160,8 +132,8 @@ func (pgMark PageMark) makePage(c *creator.Creator) error {
 	common.Log.Info("page=%+v %d", *page.MediaBox, *page.Rotate)
 	c.AddPage(page)
 
-	for _, imgMark := range pgMark.Images {
-		if err := imgMark.addImageToPage(c); err != nil {
+	for _, mark := range pgMark.Images {
+		if err := mark.addImageToPage(c); err != nil {
 			return err
 		}
 	}
@@ -169,90 +141,64 @@ func (pgMark PageMark) makePage(c *creator.Creator) error {
 }
 
 // addImageToPage adds the input image in the file `pagePath` to the PDF file represented by `c`.
-// Foreground subimages are created from the rectangles `rectList` applied to this image and a
-// a background image is created by blanking the rectangles on the image.
-func (imgMark ImageMark) addImageToPage(c *creator.Creator) error {
-	common.Log.Info("addImageToPage: imgMark=%+v", imgMark)
+// The main image is in `mark.ImagePath`. The optional mask image in in `mark.MaskImage.ImagePath`.
+func (mark ImageMark) addImageToPage(c *creator.Creator) error {
+	common.Log.Info("addImageToPage: mark=%+v", mark)
 
-	img, err := loadGoImage(imgMark.ImagePath)
+	goImg, err := loadGoImage(mark.ImagePath)
 	if err != nil {
 		return err
 	}
 
-	// Draw the background image.
-	return imgMark.addImage(c, img)
-}
-
-func makeEncoder(encodingName string, w, h int) core.StreamEncoder {
-	switch encodingName {
-	case "JBIG2Decode":
-		return core.NewFlateEncoder()
-	default:
-		encoder := core.NewDCTEncoder()
-		encoder.Width = w
-		encoder.Height = h
-		encoder.Quality = jpegQuality
-		return encoder
-
-		// case encodeCCITT:
-		// 	encoder := core.NewCCITTFaxEncoder()
-		// 	encoder.Columns = w
-		// 	encoder.Rows = h
-		// 	return encoder
-		// case encodeFlate:
-		// 	return core.NewFlateEncoder()
-		// case encodeDCT:
-		// 	encoder := core.NewDCTEncoder()
-		// 	encoder.Width = w
-		// 	encoder.Height = h
-		// 	encoder.Quality = jpegQuality
-		// 	return encoder
+	var goMaskImg image.Image
+	if mark.MaskImage.ImagePath != "" {
+		goMaskImg, err = loadGoImage(mark.ImagePath)
+		if err != nil {
+			panic(err)
+			return err
+		}
 	}
-	panic(fmt.Errorf("unknown imageEncoding %#v", encodingName))
-}
 
-// addImage adds image in `imagePath` to `c` with encoding and scale given by `encoder` and `scale`.
-func (imgMark ImageMark) addImage(c *creator.Creator, goImg image.Image) error {
-	encoder := makeEncoder(imgMark.Filter, imgMark.Width, imgMark.Height)
-	// img.SetEncoder(encoder)
-	// if enc == encodeCCITT || enc == encodeJBIG2 {
-	// 	img.SetBitsPerComponent(1)
-	// }
-	img, err := c.NewImageFromGoImageMask(goImg, nil)
+	common.Log.Info("addImageToPage: img=%t maskImg=%t %q",
+		goImg != nil, goMaskImg != nil, mark.MaskImage.ImagePath)
+
+	img, err := c.NewImageWithMaskFromGoImages(goImg, goMaskImg)
 	if err != nil {
 		return err
 	}
-	if imgMark.BitsPerComponent == 1 {
-		img.SetBitsPerComponent(1)
-		ccittEncoder := core.NewCCITTFaxEncoder()
-		ccittEncoder.Columns = int(img.Width())
-		img.SetEncoder(ccittEncoder)
-	} else {
-		img.SetEncoder(encoder)
-	}
-
-	img.SetPos(imgMark.X, imgMark.Y)
-	img.SetWidth(imgMark.W)
-	img.SetHeight(imgMark.H)
+	img.SetBitsPerComponent(int64(mark.BitsPerComponent))
+	encoder := makeEncoder(mark.BitsPerComponent, mark.Lossy, mark.Width, mark.Height)
+	img.SetEncoder(encoder)
 	common.Log.Info("encoder=%v", encoder)
+
+	if mark.MaskImage.ImagePath != "" {
+		img.SetMaskBitsPerComponent(int64(mark.MaskImage.BitsPerComponent))
+		maskEncoder := makeEncoder(mark.MaskImage.BitsPerComponent, mark.MaskImage.Lossy, mark.Width, mark.Height)
+		img.SetMaskEncoder(maskEncoder)
+		common.Log.Info("maskEncoder=%v", maskEncoder)
+	}
+
+	img.SetPos(mark.X, mark.Y)
+	img.SetWidth(mark.W)
+	img.SetHeight(mark.H)
+
 	return c.Draw(img)
 }
 
-// saveGoImage saves Go image `img` to file `filename` with imageEncoding `enc`.
-func saveGoImage(filename string, img image.Image, enc imageEncoding) error {
-	out, err := os.Create(filename)
-	if err != nil {
-		return err
+func makeEncoder(bpc int, lossy bool, w, h int) core.StreamEncoder {
+	if bpc == 1 {
+		ccittEncoder := core.NewCCITTFaxEncoder()
+		ccittEncoder.Columns = w
+		return ccittEncoder
 	}
-	defer out.Close()
-
-	switch enc {
-	case encodeFlate, encodeCCITT, encodeJBIG2:
-		return png.Encode(out, img)
-	case encodeDCT:
-		return jpeg.Encode(out, img, nil)
+	if !lossy {
+		return core.NewFlateEncoder()
 	}
-	return fmt.Errorf("unsupported encoding %#v", enc)
+	encoder := core.NewDCTEncoder()
+	encoder.Width = w
+	encoder.Height = h
+	encoder.Quality = jpegQuality
+	return encoder
 }
 
 // loadGoImage loads the image in file `pagePath` and returns it as a Go image.
