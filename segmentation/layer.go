@@ -39,30 +39,41 @@ const (
 	jpegQuality = 25 // Quality setting for DCT images
 )
 
+// Basic idea is that we need the following categories of image
+//  - 1 bit or contone
+//  - grayscale or color
+//  - lossless or lossy
+
+// For each of these choices we create an encoding.
+// Today we have
+//  - CCITT for 1 bit
+//  - Flate for lossless contone
+//  - DCT for lossy contone  (DCT quality is a program setting)
+// In the future we will use
+//  - JBIC2 for 1 bit
+//  - Flate for lossless contone
+//  - Maybe in the distrant future JPEG2000 for lossy contone\
 type CoreImage struct {
-	core.PdfObjectReference
-	ImagePath        string // We don't need imagePath and Image
-	Filter           string // core.StreamEncoder
+	ImagePath string // Input image. We don't change resolution.
+	// Rendering instructions
 	ColorComponents  int
 	BitsPerComponent int
 	Lossy            bool
 }
-type ImageMark struct {
+type ImageSpec struct {
 	CoreImage                   // Main image
 	MaskImage         CoreImage // Optional image mask
-	Width, Height     int       // Width and height of image
-	X, Y, W, H, Theta float64   // Location and size on page
-	Name              string
+	X, Y, W, H, Theta float64   // Location and size on page in points
 }
 
-type PageMark struct {
-	W, H   float64
-	Rotate int
-	Images []ImageMark
+type PageSpec struct {
+	W, H   float64     // Width and height of page in points
+	Rotate int         // Page rotation flag
+	Images []ImageSpec // Images to be placed on page
 }
 
-type DocMark struct {
-	Pages []PageMark
+type DocSpec struct {
+	Pages []PageSpec
 }
 
 const usage = "go run segment.go <json file>"
@@ -123,7 +134,7 @@ func makePdf(jsonPath string) error {
 	return nil
 }
 
-func (pgMark PageMark) makePage(c *creator.Creator) error {
+func (pgMark PageSpec) makePage(c *creator.Creator) error {
 	page := model.NewPdfPage()
 	mediaBox := model.PdfRectangle{Urx: pgMark.W, Ury: pgMark.H}
 	page.MediaBox = &mediaBox
@@ -132,8 +143,8 @@ func (pgMark PageMark) makePage(c *creator.Creator) error {
 	common.Log.Info("page=%+v %d", *page.MediaBox, *page.Rotate)
 	c.AddPage(page)
 
-	for _, mark := range pgMark.Images {
-		if err := mark.addImageToPage(c); err != nil {
+	for _, spec := range pgMark.Images {
+		if err := spec.addImageToPage(c); err != nil {
 			return err
 		}
 	}
@@ -141,18 +152,18 @@ func (pgMark PageMark) makePage(c *creator.Creator) error {
 }
 
 // addImageToPage adds the input image in the file `pagePath` to the PDF file represented by `c`.
-// The main image is in `mark.ImagePath`. The optional mask image in in `mark.MaskImage.ImagePath`.
-func (mark ImageMark) addImageToPage(c *creator.Creator) error {
-	common.Log.Info("addImageToPage: mark=%+v", mark)
+// The main image is in `spec.ImagePath`. The optional mask image in in `spec.MaskImage.ImagePath`.
+func (spec ImageSpec) addImageToPage(c *creator.Creator) error {
+	common.Log.Info("addImageToPage: spec=%+v", spec)
 
-	goImg, err := loadGoImage(mark.ImagePath)
+	goImg, err := loadGoImage(spec.ImagePath)
 	if err != nil {
 		return err
 	}
 
 	var goMaskImg image.Image
-	if mark.MaskImage.ImagePath != "" {
-		goMaskImg, err = loadGoImage(mark.ImagePath)
+	if spec.MaskImage.ImagePath != "" {
+		goMaskImg, err = loadGoImage(spec.ImagePath)
 		if err != nil {
 			panic(err)
 			return err
@@ -160,32 +171,38 @@ func (mark ImageMark) addImageToPage(c *creator.Creator) error {
 	}
 
 	common.Log.Info("addImageToPage: img=%t maskImg=%t %q",
-		goImg != nil, goMaskImg != nil, mark.MaskImage.ImagePath)
+		goImg != nil, goMaskImg != nil, spec.MaskImage.ImagePath)
 
 	img, err := c.NewImageWithMaskFromGoImages(goImg, goMaskImg)
 	if err != nil {
 		return err
 	}
-	img.SetBitsPerComponent(int64(mark.BitsPerComponent))
-	encoder := makeEncoder(mark.BitsPerComponent, mark.Lossy, mark.Width, mark.Height)
+	img.SetBitsPerComponent(int64(spec.BitsPerComponent))
+
+	encoder := makeEncoder(spec.BitsPerComponent, spec.Lossy, goImg)
 	img.SetEncoder(encoder)
 	common.Log.Info("encoder=%v", encoder)
 
-	if mark.MaskImage.ImagePath != "" {
-		img.SetMaskBitsPerComponent(int64(mark.MaskImage.BitsPerComponent))
-		maskEncoder := makeEncoder(mark.MaskImage.BitsPerComponent, mark.MaskImage.Lossy, mark.Width, mark.Height)
+	if spec.MaskImage.ImagePath != "" {
+
+		img.SetMaskBitsPerComponent(int64(spec.MaskImage.BitsPerComponent))
+		maskEncoder := makeEncoder(spec.MaskImage.BitsPerComponent, spec.MaskImage.Lossy, goMaskImg)
 		img.SetMaskEncoder(maskEncoder)
 		common.Log.Info("maskEncoder=%v", maskEncoder)
 	}
 
-	img.SetPos(mark.X, mark.Y)
-	img.SetWidth(mark.W)
-	img.SetHeight(mark.H)
+	img.SetPos(spec.X, spec.Y)
+	img.SetWidth(spec.W)
+	img.SetHeight(spec.H)
 
 	return c.Draw(img)
 }
 
-func makeEncoder(bpc int, lossy bool, w, h int) core.StreamEncoder {
+func makeEncoder(bpc int, lossy bool, goImg image.Image) core.StreamEncoder {
+	b := goImg.Bounds()
+	w := b.Max.X - b.Min.X
+	h := b.Max.Y - b.Min.Y
+
 	if bpc == 1 {
 		ccittEncoder := core.NewCCITTFaxEncoder()
 		ccittEncoder.Columns = w
@@ -213,7 +230,7 @@ func loadGoImage(pagePath string) (image.Image, error) {
 	return img, err
 }
 
-func saveDocMark(filename string, doc DocMark) error {
+func saveDocSpec(filename string, doc DocSpec) error {
 	b, err := json.MarshalIndent(doc, "", "\t")
 	if err != nil {
 		return err
@@ -222,12 +239,12 @@ func saveDocMark(filename string, doc DocMark) error {
 	return err
 }
 
-func loadDocMark(filename string) (DocMark, error) {
+func loadDocMark(filename string) (DocSpec, error) {
 	b, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return DocMark{}, err
+		return DocSpec{}, err
 	}
-	var doc DocMark
+	var doc DocSpec
 	err = json.Unmarshal(b, &doc)
 	common.Log.Info("doc=%+v err=%v", doc, err)
 	return doc, err
