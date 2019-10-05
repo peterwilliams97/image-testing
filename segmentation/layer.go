@@ -1,21 +1,4 @@
-//
-// Segment images then combines the segments in a PDF file.
-// Another program will create a JSON file with segmentation instructions. This program reads the
-// JSON file, segments the images referenced in the JSON file, encodes rectangle enclosed segements
-// as DCT, encoded the rest of the image as Flate then combines the images in a PDF file.
-//
-// Example JSON instructions file for a images that are 300 dpi A4 whole page scans.
-//   {
-//     "pdf.output/Volunteer/doc-001.png": [
-//         {"X0":   0,  "Y0":    0, "Y1": 2450} ],
-//     "pdf.output/Volunteer/doc-002.png": [
-//         {"X0": 356, "X1": 2148, "Y0": 1432, "Y1": 2935},
-//         {"X0":  66, "X1": 118,  "Y0":  990, "Y1": 3508} ]
-//   }
-//
-// The example JSON files references 300 dpi RGB raster files doc-001.png and doc-002.png. It
-// requests that the area x,y: X0 <= x < X1 and Y0 <= y < Y1 for all the rectangles for that page
-// be DCT encoded and the remainder of the image be Flate encoded.
+// We build layered images using PDF image masks.
 package main
 
 import (
@@ -23,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -39,44 +23,7 @@ const (
 	jpegQuality = 25 // Quality setting for DCT images
 )
 
-// Basic idea is that we need the following categories of image
-//  - 1 bit or contone
-//  - grayscale or color
-//  - lossless or lossy
-
-// For each of these choices we create an encoding.
-// Today we have
-//  - CCITT for 1 bit
-//  - Flate for lossless contone
-//  - DCT for lossy contone  (DCT quality is a program setting)
-// In the future we will use
-//  - JBIC2 for 1 bit
-//  - Flate for lossless contone
-//  - Maybe in the distrant future JPEG2000 for lossy contone\
-type CoreImage struct {
-	ImagePath string // Input image. We don't change resolution.
-	// Rendering instructions
-	ColorComponents  int
-	BitsPerComponent int
-	Lossy            bool
-}
-type ImageSpec struct {
-	CoreImage                   // Main image
-	MaskImage         CoreImage // Optional image mask
-	X, Y, W, H, Theta float64   // Location and size on page in points
-}
-
-type PageSpec struct {
-	W, H   float64     // Width and height of page in points
-	Rotate int         // Page rotation flag
-	Images []ImageSpec // Images to be placed on page
-}
-
-type DocSpec struct {
-	Pages []PageSpec
-}
-
-const usage = "go run segment.go <json file>"
+const usage = "go run layer.go <json file>"
 
 func main() {
 	common.SetLogger(common.NewConsoleLogger(common.LogLevelInfo))
@@ -89,32 +36,68 @@ func main() {
 	if _, err := os.Stat(imageDir); os.IsNotExist(err) {
 		os.Mkdir(imageDir, 0777)
 	}
-	err := makePdf(flag.Arg(0))
+	err := makeDoc(flag.Arg(0))
 	if err != nil {
 		panic(err)
 	}
 }
 
-// makePdf makes a PDF file from the instructions in JSON file `jsonPath`.
-// The JSON file is a dict of pageName: []Rect where the rectangles are masking coordinate for the
-// input image in the image file pageName.
-// Creation `mode` can be one of:
-//   createSimple: Build the PDF one input image per page (ignoring rectangles) encoded in `enc`.
-//   createCompound: Build the PDF with for each page:
-//     background = input image with the rectangles knocked out, encoded in `bgdEncoding`
-//     foreground = the rectangles extracted from the input image, encoded in `fgdEncoding`
-//   createBgd: Build the PDF from only the background images in createCompound.
-//   createFgd: Build the PDF from only the foreground images in createCompound.
-func makePdf(jsonPath string) error {
+// The basic idea is that we need the following categories of images.
+//  - 1 bit or contone
+//  - grayscale or color
+//  - lossless or lossy
+// This is our CoreImags. The ImageSpec is a PDF image which has a location, size and optional masking
+// image.
 
-	common.Log.Info("makePdf: %q", jsonPath)
+// CoreImage is our basic image specfication. ImageSpec is built from this.
+// For each of these choices we create an encoding.
+// Today we have (see makeEncoder)
+//  - CCITT for 1 bit
+//  - Flate for lossless contone
+//  - DCT for lossy contone  (DCT quality is a program setting)
+// In the future we will use
+//  - JBIG2 for 1 bit
+//  - Flate for lossless contone
+//  - Maybe in the distant future JPEG2000 for lossy contone\
+type CoreImage struct {
+	ImagePath string // Input image. We don't change resolution.
+	// Rendering instructions
+	ColorComponents  int
+	BitsPerComponent int
+	Lossy            bool
+}
+
+// ImageSpec specifies how an image is rendered on a PDF page. It has an optional image mask and
+// the size and location of the image on the page.
+type ImageSpec struct {
+	CoreImage                   // Main image
+	MaskImage         CoreImage // Optional image mask
+	X, Y, W, H, Theta float64   // Location and size on page in points
+}
+
+// PageSpec specifies a PDF page contain zero or more images.
+type PageSpec struct {
+	W, H   float64     // Width and height of page in points
+	Rotate int         // Page rotation flag
+	Images []ImageSpec // Images to be placed on page
+}
+
+// DocSpec describes a PDF document containing images
+type DocSpec struct {
+	Pages []PageSpec
+}
+
+// makeDoc makes a PDF file from the instructions in JSON file `jsonPath`.
+// The JSON file is of a DocSpec.
+func makeDoc(jsonPath string) error {
+	common.Log.Info("makeDoc: %q", jsonPath)
 
 	doc, err := loadDocMark(jsonPath)
 	if err != nil {
 		return err
 	}
 	common.Log.Info("doc=%+v", doc)
-	common.Log.Info("makePdf: %d pages", len(doc.Pages))
+	common.Log.Info("makeDoc: %d pages", len(doc.Pages))
 
 	c := creator.New()
 	for _, page := range doc.Pages {
@@ -129,21 +112,22 @@ func makePdf(jsonPath string) error {
 	if err != nil {
 		return err
 	}
-	common.Log.Info("makePdf: %d pages\n\t   %q\n\t-> %q", len(doc.Pages), jsonPath, outPath)
-
+	common.Log.Info("makeDoc: %d pages\n\t   %q\n\t-> %q", len(doc.Pages), jsonPath, outPath)
 	return nil
 }
 
-func (pgMark PageSpec) makePage(c *creator.Creator) error {
+// makePage makes a PDF file from the instructions in `pageSpec`.
+// The JSON file is of a DocSpec.
+func (pageSpec PageSpec) makePage(c *creator.Creator) error {
 	page := model.NewPdfPage()
-	mediaBox := model.PdfRectangle{Urx: pgMark.W, Ury: pgMark.H}
+	mediaBox := model.PdfRectangle{Urx: pageSpec.W, Ury: pageSpec.H}
 	page.MediaBox = &mediaBox
-	rotate := int64(pgMark.Rotate)
+	rotate := int64(pageSpec.Rotate)
 	page.Rotate = &rotate
 	common.Log.Info("page=%+v %d", *page.MediaBox, *page.Rotate)
 	c.AddPage(page)
 
-	for _, spec := range pgMark.Images {
+	for _, spec := range pageSpec.Images {
 		if err := spec.addImageToPage(c); err != nil {
 			return err
 		}
@@ -151,24 +135,30 @@ func (pgMark PageSpec) makePage(c *creator.Creator) error {
 	return nil
 }
 
-// addImageToPage adds the input image in the file `pagePath` to the PDF file represented by `c`.
+// addImageToPage adds the input image in `spc` to the PDF file represented by `c`.
 // The main image is in `spec.ImagePath`. The optional mask image in in `spec.MaskImage.ImagePath`.
 func (spec ImageSpec) addImageToPage(c *creator.Creator) error {
 	common.Log.Info("addImageToPage: spec=%+v", spec)
 
-	goImg, err := loadGoImage(spec.ImagePath)
-	if err != nil {
-		return err
-	}
-
 	var goMaskImg image.Image
 	if spec.MaskImage.ImagePath != "" {
-		goMaskImg, err = loadGoImage(spec.ImagePath)
+		if spec.MaskImage.ImagePath == spec.ImagePath {
+			panic(spec.MaskImage.ImagePath)
+		}
+		var err error
+		goMaskImg, err = loadGoImage(spec.MaskImage.ImagePath, spec.MaskImage.ColorComponents)
 		if err != nil {
 			panic(err)
 			return err
 		}
+		showGoImage("goMaskImg", goMaskImg)
 	}
+
+	goImg, err := loadGoImage(spec.ImagePath, spec.ColorComponents)
+	if err != nil {
+		return err
+	}
+	showGoImage("goImg", goImg)
 
 	common.Log.Info("addImageToPage: img=%t maskImg=%t %q",
 		goImg != nil, goMaskImg != nil, spec.MaskImage.ImagePath)
@@ -177,14 +167,15 @@ func (spec ImageSpec) addImageToPage(c *creator.Creator) error {
 	if err != nil {
 		return err
 	}
-	img.SetBitsPerComponent(int64(spec.BitsPerComponent))
 
+	common.Log.Info("addImageToPage:\n%s", img.String())
+
+	img.SetBitsPerComponent(int64(spec.BitsPerComponent))
 	encoder := makeEncoder(spec.BitsPerComponent, spec.Lossy, goImg)
 	img.SetEncoder(encoder)
 	common.Log.Info("encoder=%v", encoder)
 
 	if spec.MaskImage.ImagePath != "" {
-
 		img.SetMaskBitsPerComponent(int64(spec.MaskImage.BitsPerComponent))
 		maskEncoder := makeEncoder(spec.MaskImage.BitsPerComponent, spec.MaskImage.Lossy, goMaskImg)
 		img.SetMaskEncoder(maskEncoder)
@@ -198,6 +189,7 @@ func (spec ImageSpec) addImageToPage(c *creator.Creator) error {
 	return c.Draw(img)
 }
 
+// makeEncoder makes a UniDoc core.StreamEncoder for Go image `goImg` for bits per component `bpc`.
 func makeEncoder(bpc int, lossy bool, goImg image.Image) core.StreamEncoder {
 	b := goImg.Bounds()
 	w := b.Max.X - b.Min.X
@@ -218,16 +210,75 @@ func makeEncoder(bpc int, lossy bool, goImg image.Image) core.StreamEncoder {
 	return encoder
 }
 
-// loadGoImage loads the image in file `pagePath` and returns it as a Go image.
-func loadGoImage(pagePath string) (image.Image, error) {
-	imgfile, err := os.Open(pagePath)
+// loadGoImage loads the image in file `imagePath` and returns it as a Go image.
+func loadGoImage(imagePath string, cpts int) (image.Image, error) {
+	imgfile, err := os.Open(imagePath)
 	if err != nil {
 		return nil, err
 	}
 	defer imgfile.Close()
 
 	img, _, err := image.Decode(imgfile)
+	if err != nil {
+		return nil, err
+	}
+
+	showGoImage(imagePath, img)
+	if img.ColorModel() == color.RGBAModel && cpts == 1 {
+		return goImageToGray(img, false), nil
+	} else if img.ColorModel() == color.GrayModel && cpts == 3 {
+		// TODO: Convert to RBGA.
+		// We don't need this yet because all our inpt images are RGB
+		panic("not implemented")
+	}
+	common.Log.Info("colormodel=%+v", img.ColorModel())
 	return img, err
+}
+
+// showGoImage prints out the dimensions of `img`.
+func showGoImage(title string, img image.Image) {
+	common.Log.Info("Go image %+q %v", title, img.Bounds())
+	return
+	// x0, x1 := img.Bounds().Min.X, img.Bounds().Max.X
+	// y0, y1 := img.Bounds().Min.Y, img.Bounds().Max.Y
+	// for y := y0; y < y1; y++ {
+	// 	fmt.Printf("\t")
+	// 	for x := x0; x < x1; x++ {
+	// 		fmt.Printf("%v, ", img.At(x, y))
+	// 	}
+	// 	fmt.Printf("\n")
+	// }
+}
+
+// goImageToGray returns the gray pixel version of `img`. If `bilevel` is true, the gray image is
+// thresholded and 0 or 255 level pixels are returned.
+func goImageToGray(img image.Image, bilevel bool) image.Image {
+	common.Log.Info("goImageToGray: %v %t", img.Bounds(), bilevel)
+	x0, x1 := img.Bounds().Min.X, img.Bounds().Max.X
+	y0, y1 := img.Bounds().Min.Y, img.Bounds().Max.Y
+
+	grayImg := image.NewGray(img.Bounds())
+
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			grayImg.Set(x, y, img.At(x, y))
+		}
+	}
+	if bilevel {
+		for y := y0; y < y1; y++ {
+			for x := x0; x < x1; x++ {
+				g := grayImg.GrayAt(x, y).Y
+				if g < 127 {
+					g = 0
+				} else {
+					g = 255
+				}
+				grayImg.SetGray(x, y, color.Gray{g})
+			}
+		}
+	}
+
+	return grayImg
 }
 
 func saveDocSpec(filename string, doc DocSpec) error {
