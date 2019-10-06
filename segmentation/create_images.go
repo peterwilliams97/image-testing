@@ -32,7 +32,12 @@ func main() {
 	if err := create("bottom.png", bottom); err != nil {
 		panic(err)
 	}
-
+	if err := create("white.png", whiteBox); err != nil {
+		panic(err)
+	}
+	if err := create("black.png", blackBox); err != nil {
+		panic(err)
+	}
 }
 
 func create(filename string, rectList []RectCol) error {
@@ -77,6 +82,12 @@ var (
 	bottom = []RectCol{
 		RectCol{Rect{0, 0, 6, 3}, black},
 		RectCol{Rect{0, 3, 6, 6}, white},
+	}
+	whiteBox = []RectCol{
+		RectCol{Rect{0, 0, 6, 6}, white},
+	}
+	blackBox = []RectCol{
+		RectCol{Rect{0, 0, 6, 6}, black},
 	}
 )
 

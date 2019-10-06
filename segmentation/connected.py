@@ -96,6 +96,7 @@ def processDirectory(inDir, doBgd, doFgd):
 
     mask = os.path.join(os.path.abspath(inDir), '*.png')
     rasterList = sorted(glob.glob(mask))
+    assert rasterList, mask
     rasterPage = {fn: jbigPath(i) for i, fn in enumerate(rasterList)}
 
     print("** processDirectory: inDir=%s doBgd=%s doFgd=%s pdfPath=%s" % (
@@ -143,15 +144,6 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
         jpgFile = pageFile + '.jpg'
         print("** page %d: %s" % (i, pageFile), file=sys.stderr)
 
-        if os.path.exists(bgdFile):
-            bgd = cv2.imread(bgdFile)
-            cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
-            bgdContents = readFile(jpgFile)
-            h, w = bgd.shape[:2]
-            print('** bgd (width, height)', [w, h], file=sys.stderr)
-        else:
-            bgdContents = None
-
         fgdContents = readFile(pageFile)
 
         # Big endian (Network byte order) 4 byte integers.
@@ -162,41 +154,78 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
         widthPts = float(width * 72) / xres
         heightPts = float(height * 72) / yres
 
+        if os.path.exists(bgdFile):
+            bgd = cv2.imread(bgdFile)
+            h, w = bgd.shape[:2]
+            print('** bgd original    (width, height)', [w, h], file=sys.stderr)
+            assert w <= width and h <= height, 'jpeg=%s jbig2=%s' % ([w, h], [width, height])
+            if w < width or h < height:
+                top = 0
+                left = 0
+                right = width - w
+                bottom = height - h
+                WHITE = [255, 255, 255]
+                bgd = cv2.copyMakeBorder(bgd, top, bottom, left, right, cv2.BORDER_CONSTANT, value=WHITE)
+
+            # bgd[:] = [255, 0, 0]   # !@#$
+            bgd = 255 - bgd
+            cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
+            bgdContents = readFile(jpgFile)
+            h, w = bgd.shape[:2]
+            print('** bgd             (width, height)', [w, h], file=sys.stderr)
+        else:
+            bgdContents = None
+
         bgdIm = b'/ImBgd%d' % (i + 1)
         fgdIm = b'/ImFgd%d' % (i + 1)
 
+        if doFgd:
+            # <</Type /XObject /Subtype /Image
+            # /Width 3520 /Height 2464
+            # /BitsPerComponent 1
+            # /ImageMask true
+            # /BlackIs1 false
+            # /Length 14306
+            # /Filter / JBIG2Decode
+            # >>
+
+            fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+                        'Width': str(width), 'Height': str(height),
+                        # 'ColorSpace': '/DeviceGray',
+                        'BitsPerComponent': '1',
+                        'ImageMask': 'true',
+                        'BlackIs1': 'false',
+                        'Filter': '/JBIG2Decode',
+                        'DecodeParms': b'<< /JBIG2Globals %s >>' % symd.ref()},
+                        fgdContents)
+            # fgdDo = b'%s Do' % fgdIm
+            # fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
+            fgdDo = b''
+            fgdRef = b''
+        else:
+            fgdXobj = None
+            fgdDo = b''
+            fgdRef = b''
+
         if doBgd and bgdContents is not None:
-            bgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
-                        'Width': str(w),
-                        'Height': str(h),
-                        'ColorSpace': '/DeviceRGB',
-                        'BitsPerComponent': '8',
-                        'Filter': '/DCTDecode'},
-                        bgdContents)
+            bgdDict = {'Type': '/XObject', 'Subtype': '/Image',
+                       'Width': str(w),
+                       'Height': str(h),
+                       'ColorSpace': '/DeviceRGB',
+                       'BitsPerComponent': '8',
+                       'Filter': '/DCTDecode'
+                       }
+            if doFgd:
+                bgdDict['Mask'] = '%d 0 R' % fgdXobj.id
+                assert w == width and h == height, 'jpeg=%s jbig2=%s' % ([w,h], [width,height])
+
+            bgdXobj = Obj(bgdDict, bgdContents)
             bgdDo = b'%s Do' % bgdIm
             bgdRef = b'%s %s ' % (bgdIm, bgdXobj.ref())
         else:
             bgdXobj = None
             bgdDo = b''
             bgdRef = b''
-
-        if doFgd:
-            fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
-                        'Width': str(width),
-                        'Height': str(height),
-                        'ColorSpace': '/DeviceGray',
-                        'ImageMask': 'true',
-                        'BlackIs1': 'false',
-                        'BitsPerComponent': '1',
-                        'Filter': '/JBIG2Decode',
-                        'DecodeParms': b'<< /JBIG2Globals %s >>' % symd.ref()},
-                        fgdContents)
-            fgdDo = b'%s Do' % fgdIm
-            fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
-        else:
-            fgdXobj = None
-            fgdDo = b''
-            fgdRef = b''
 
         # scale image to widthPts x heightPts points
         scale = b'%f 0 0 %f 0 0 cm' % (widthPts, heightPts)
