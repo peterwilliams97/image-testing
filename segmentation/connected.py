@@ -168,7 +168,7 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                 bgd = cv2.copyMakeBorder(bgd, top, bottom, left, right, cv2.BORDER_CONSTANT, value=WHITE)
 
             # bgd[:] = [255, 0, 0]   # !@#$
-            # bgd = clip(bgd)
+            bgd, bgdXform = clip(bgd)
             cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
             bgdContents = readFile(jpgFile)
             h, w = bgd.shape[:2]
@@ -241,7 +241,10 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
         # Q
         # '''
 
-        cmds = Obj({},  b'q %s %s %s Q' % (scale, bgdDo, fgdDo))
+        scaledBgd = b'q %s %s Q' % (bgdXform, bgdDo)
+
+        cmds = Obj({},  b'q %s %s %s Q' % (scale, scaledBgd, fgdDo))
+        # cmds = Obj({},  b'q %s %s Q' % (scale, scaledBgd))
         # cmds = Obj({},  b'%s q %s %s %s Q' % (rectFill, scale, bgdDo, fgdDo))
 
         resources = Obj({'XObject': b'<<%s%s>>' % (bgdRef, fgdRef)})
@@ -377,7 +380,11 @@ def readJpegFile(orig):
     return readFile(filename)
 
 
+allScales = []
+
+
 def clip(img):
+    global allScales
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     h, w = gray.shape[:2]
@@ -387,10 +394,20 @@ def clip(img):
 
     print("-- x0=%d x1=%d w=%d" % (x0, x1, w))
     print("-- y0=%d y1=%d h=%d" % (y0, y1, h))
-    # assert False
+
 
     img = img[y0:y1, x0:x1]
-    return img
+
+    scaleX = (x1 - x0) / w
+    scaleY = (y1 - y0) / h
+    dx = x0 / w
+    dy = (h-y1) / h
+    m = b'%f 0 0 %f %f %f cm' % (scaleX, scaleY, dx, dy)
+
+    print("-- scale = %.2f x %.2f = %.2f" % (scaleX, scaleY, scaleX * scaleY))
+    allScales.append(scaleX * scaleY)
+    print("-- m=%s" % m)
+    return img, m
 
 
 def roiY(gray):
@@ -443,3 +460,5 @@ def usage(script, msg):
 
 if __name__ == '__main__':
     main()
+    for i, scale in enumerate(allScales):
+        print("%3d: %5.3f" % (i, scale))
