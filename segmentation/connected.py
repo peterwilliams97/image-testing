@@ -32,6 +32,7 @@ import struct
 import glob
 import os
 import cv2
+import zlib
 import subprocess
 import argparse
 from pprint import PrettyPrinter
@@ -170,7 +171,7 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
             # bgd[:] = [255, 0, 0]   # !@#$
             bgd, bgdXform = clip(bgd)
             cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
-            bgdContents = readFile(jpgFile)
+            bgdContents = readJpegFile(jpgFile)
             h, w = bgd.shape[:2]
             print('** bgd             (width, height)', [w, h], file=sys.stderr)
         else:
@@ -219,7 +220,7 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                        'Height': str(h),
                        'ColorSpace': '/DeviceRGB',
                        'BitsPerComponent': '8',
-                       'Filter': '/DCTDecode'
+                       'Filter': '[/FlateDecode /DCTDecode]'
                        }
             bgdXobj = Obj(bgdDict, bgdContents)
             bgdDo = b'%s Do' % bgdIm
@@ -374,10 +375,16 @@ def ref(i):
 
 
 def readJpegFile(orig):
-    filename = orig + '.lo.jpg'
-    img = cv2.imread(orig)
-    cv2.imwrite(filename, img, [int(cv2.IMWRITE_JPEG_QUALITY), 25])
-    return readFile(filename)
+    # filename = orig + '.lo.jpg'
+    # img = cv2.imread(orig)
+    # cv2.imwrite(filename, img, [int(cv2.IMWRITE_JPEG_QUALITY), 25])
+    filename = orig
+    data = readFile(filename)
+    compressed = zlib.compress(data, level=9)
+    print("readJpegFile: %s %d -> %d = %.1f%%" % (orig, len(data), len(compressed),
+                                                  100.0 * len(compressed) / len(data),
+    ))
+    return compressed
 
 
 allScales = []
