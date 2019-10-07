@@ -242,7 +242,9 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
         # Q
         # '''
 
-        scaledBgd = b'q %s %s Q' % (bgdXform, bgdDo)
+        scaledBgd = b''
+        if bgdDo:
+            scaledBgd = b'q %s %s Q' % (bgdXform, bgdDo)
 
         cmds = Obj({},  b'q %s %s %s Q' % (scale, scaledBgd, fgdDo))
         # cmds = Obj({},  b'q %s %s Q' % (scale, scaledBgd))
