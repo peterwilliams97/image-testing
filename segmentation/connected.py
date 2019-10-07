@@ -168,7 +168,7 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                 bgd = cv2.copyMakeBorder(bgd, top, bottom, left, right, cv2.BORDER_CONSTANT, value=WHITE)
 
             # bgd[:] = [255, 0, 0]   # !@#$
-            bgd = 255 - bgd
+            # bgd = clip(bgd)
             cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
             bgdContents = readFile(jpgFile)
             h, w = bgd.shape[:2]
@@ -189,7 +189,7 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
             # /Filter / JBIG2Decode
             # >>
 
-            fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+            maskXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
                         'Width': str(width), 'Height': str(height),
                         # 'ColorSpace': '/DeviceGray',
                         'BitsPerComponent': '1',
@@ -198,10 +198,16 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                         'Filter': '/JBIG2Decode',
                         'DecodeParms': b'<< /JBIG2Globals %s >>' % symd.ref()},
                         fgdContents)
-            # fgdDo = b'%s Do' % fgdIm
-            # fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
-            fgdDo = b''
-            fgdRef = b''
+            black = b'\x00\x00\x00'
+            fgdXobj = Obj({'Type': '/XObject', 'Subtype': '/Image',
+                           'Width':'1', 'Height': '1',
+                           'ColorSpace': '/DeviceRGB',
+                           'BitsPerComponent': '8',
+                           'Mask': '%d 0 R' % maskXobj.id
+                           },
+                            black)
+            fgdDo = b'%s Do' % fgdIm
+            fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
         else:
             fgdXobj = None
             fgdDo = b''
@@ -215,10 +221,6 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                        'BitsPerComponent': '8',
                        'Filter': '/DCTDecode'
                        }
-            if doFgd:
-                bgdDict['Mask'] = '%d 0 R' % fgdXobj.id
-                assert w == width and h == height, 'jpeg=%s jbig2=%s' % ([w,h], [width,height])
-
             bgdXobj = Obj(bgdDict, bgdContents)
             bgdDo = b'%s Do' % bgdIm
             bgdRef = b'%s %s ' % (bgdIm, bgdXobj.ref())
@@ -230,14 +232,25 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
         # scale image to widthPts x heightPts points
         scale = b'%f 0 0 %f 0 0 cm' % (widthPts, heightPts)
 
+        # rectFill = b'''
+        # q
+        # 1 0 0 rg
+        # 1 1 0 RG
+        # 50 50 500 700 re
+        # B
+        # Q
+        # '''
+
         cmds = Obj({},  b'q %s %s %s Q' % (scale, bgdDo, fgdDo))
+        # cmds = Obj({},  b'%s q %s %s %s Q' % (rectFill, scale, bgdDo, fgdDo))
+
         resources = Obj({'XObject': b'<<%s%s>>' % (bgdRef, fgdRef)})
         page = Obj({'Type': '/Page', 'Parent': pages.ref(),
                     'MediaBox': '[0 0 %f %f]' % (widthPts, heightPts),
                     'Contents': cmds.ref(),
                     'Resources': resources.ref()
                     })
-        doc.add_objects([bgdXobj, fgdXobj, cmds, resources, page])
+        doc.add_objects([maskXobj, bgdXobj, fgdXobj, cmds, resources, page])
         page_objs.append(page)
 
         pages.d.d[b'Count'] = b'%d' % len(page_objs)
@@ -357,6 +370,46 @@ def ref(i):
     return b'%d 0 R' % i
 
 
+def readJpegFile(orig):
+    filename = orig + '.lo.jpg'
+    img = cv2.imread(orig)
+    cv2.imwrite(filename, img, [int(cv2.IMWRITE_JPEG_QUALITY), 25])
+    return readFile(filename)
+
+
+def clip(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    h, w = gray.shape[:2]
+    y0, y1 = roiY(gray)
+    region = gray[y0:y1, :].T
+    x0, x1 = roiY(region)
+
+    print("-- x0=%d x1=%d w=%d" % (x0, x1, w))
+    print("-- y0=%d y1=%d h=%d" % (y0, y1, h))
+    # assert False
+
+    img = img[y0:y1, x0:x1]
+    return img
+
+
+def roiY(gray):
+    h, w = gray.shape[:2]
+    y0 = 0
+    for y in range(h):
+        if any(gray[y, :] != 255):
+            break
+        y0 = y + 1
+    y1 = 0
+    for y in range(h-1, y0, -1):
+        if any(gray[y, :] != 255):
+            break
+        y1 = y
+
+    # print("** y0=%d y1=%d h=%d w=%d" % (y0, y1, h, w))
+    return y0, y1
+
+
 def readFile(filename):
     try:
         with open(filename, 'rb') as f:
@@ -374,6 +427,7 @@ def writeFile(filename, obj):
         print("error writing file %s" % filename, file=sys.stderr)
         raise
 
+
 def pprint(msg):
     """Pretty print `msg` to stderr."""
     return
@@ -385,14 +439,6 @@ def usage(script, msg):
         print("%s: %s\n" % (script, msg), file=sys.stderr)
         print("Usage: %s [file_basename] > out.pdf\n" % script, file=sys.stderr)
     sys.exit(1)
-
-
-# OUTPUT = re.compile(r'\.\d+$')
-
-
-# def isOutput(p):
-#     return OUTPUT.search(p) is not None
-
 
 
 if __name__ == '__main__':
