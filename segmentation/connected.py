@@ -36,8 +36,11 @@ import zlib
 import subprocess
 import argparse
 from pprint import PrettyPrinter
+from time import time
 
 pprinter = PrettyPrinter(stream=sys.stderr)
+
+MBYTE = 1024.0 * 1024.0
 
 
 # This is a very simple script to make a PDF file out of the output of a
@@ -78,9 +81,13 @@ def processDirectory(inDir, doBgd, doFgd):
     """Create a layered PDF file from the rasters in `inDir`
         Temp files are stored in `jbigDir`
     """
+    if inDir.endswith("/"):
+        print("%s->%s" % (inDir, inDir[:-1]))
+        inDir = inDir[:-1]
 
     base = os.path.basename(inDir)
     base, _ = os.path.splitext(base)
+    assert base, inDir
     jbigDir = os.path.join(dataDir, base)
     symbolPath = os.path.join(jbigDir, 'output.sym')
     if doBgd and doFgd:
@@ -91,6 +98,8 @@ def processDirectory(inDir, doBgd, doFgd):
         pdfPath = base + '.connected.fgd.pdf'
     else:
         assert False, "nothing to do"
+
+    print("pdfPath=%s" % pdfPath)
 
     def jbigPath(i):
         return os.path.join(jbigDir, 'output.%04d' % i)
@@ -106,6 +115,7 @@ def processDirectory(inDir, doBgd, doFgd):
     print("** processDirectory: jbigDir= %s" % jbigDir, file=sys.stderr)
 
     os.makedirs(jbigDir, exist_ok=True)
+    t0 = time()
     try:
         os.chdir(jbigDir)
         print("** cwd=%s" % os.getcwd())
@@ -118,16 +128,32 @@ def processDirectory(inDir, doBgd, doFgd):
     finally:
         os.chdir(here)
 
+    dtJbig = time() - t0
+
     pagefiles = sorted(rasterPage.values())
     print("** processDirectory: jbigDir=%s" % jbigDir, file=sys.stderr)
 
+    t0 = time()
     doc = buildPDF(symbolPath, pagefiles, doBgd, doFgd)
+    dtPdf = time() - t0
+    for i, scale in enumerate(allScales):
+        print("%3d: %5.3f" % (i, scale))
+
     writeFile(pdfPath, bytes(doc))
+    print("bgdSzes=%d %.1f MB" % (len(bgdSizes), sum(bgdSizes)/MBYTE))
+    print("fgdSzes=%d %.1f MB" % (len(fgdSizes), sum(fgdSizes)/MBYTE))
+    print("  textSize=%.1f MB" % (textSize/MBYTE))
+    print("streamSize=%.1f MB" % (streamSize/MBYTE))
+    print("     total=%.1f MB" % ((textSize+streamSize)/MBYTE))
+    print("dtJbig=%6.1f sec" % dtJbig)
+    print(" dtPdf=%6.1f sec" % dtPdf)
+    print(" total=%6.1f sec" % (dtJbig+dtPdf))
 
 
 def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
     """Build a PDF from JBIG2 symbol table file `symbolPath` and page files `pagefiles`.
     """
+    global bgdSizes, fgdSizes
     print("** symbolPath=%s" % symbolPath, file=sys.stderr)
     print("** pagefiles= %d: %s" % (len(pagefiles), pagefiles), file=sys.stderr)
 
@@ -171,11 +197,13 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
             # bgd[:] = [255, 0, 0]   # !@#$
             bgd, bgdXform = clip(bgd)
             cv2.imwrite(jpgFile, bgd, [cv2.IMWRITE_JPEG_QUALITY, 25])
-            bgdContents = readJpegFile(jpgFile)
+            bgdContents, bgdImproved = readJpegFile(jpgFile)
             h, w = bgd.shape[:2]
             print('** bgd             (width, height)', [w, h], file=sys.stderr)
+            bgdSizes.append(len(bgdContents))
         else:
             bgdContents = None
+            bgdImproved = False
 
         bgdIm = b'/ImBgd%d' % (i + 1)
         fgdIm = b'/ImFgd%d' % (i + 1)
@@ -209,10 +237,15 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                             black)
             fgdDo = b'%s Do' % fgdIm
             fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
+            fgdSizes.append(len(fgdContents))
         else:
             fgdXobj = None
             fgdDo = b''
             fgdRef = b''
+
+        bgdFiter = '/DCTDecode'
+        if bgdImproved:
+            bgdFiter = '[/FlateDecode /DCTDecode]'
 
         if doBgd and bgdContents is not None:
             bgdDict = {'Type': '/XObject', 'Subtype': '/Image',
@@ -307,25 +340,51 @@ class Doc:
                                   o.d.d.get(b'Type', b'Z'),
                                   ))
 
+    objectSizes = []
     add(b'%PDF-1.4')
     for o in self.objs:
       offsets.append(Doc.pos)
       add(b'%d 0 obj' % o.id)
+      objectSizes.append(len(bytes(o)))
       add(bytes(o))
+
+    data = b'\n'.join(a)
+    print("document objects size (0) = %.1f MB" % (len(data)/MBYTE))
+
     xrefstart = Doc.pos
     a.append(b'xref')
     a.append(b'0 %d' % (len(offsets) + 1))
     a.append(b'0000000000 65535 f ')
+
+    data = b'\n'.join(a)
+    print("document objects size (1) = %.1f MB" % (len(data)/MBYTE))
+
     for o in offsets:
         a.append(b'%010d 00000 n ' % o)
+
+    data = b'\n'.join(a)
+    print("document objects size (2) = %.1f MB" % (len(data)/MBYTE))
+
     a.append(b'')
     a.append(b'trailer')
     a.append(b'<</Size %d\n/Root %s>>' % (len(offsets) + 1, ref(self.catalogId)))
+
+    data = b'\n'.join(a)
+    print("document objects size (3) = %.1f MB" % (len(data)/MBYTE))
+
     a.append(b'startxref')
-    a.append(bytes(xrefstart))
+    a.append(b'%d' % xrefstart)
+
+    # print("xrefstart = %.1f MB" % (len(bytes(xrefstart))/MBYTE))
+    data = b'\n'.join(a)
+    print("document objects size (4) = %.1f MB" % (len(data)/MBYTE))
+
     a.append(b'%%EOF')
 
-    return b'\n'.join(a)
+    data = b'\n'.join(a)
+    print("objects sizes = %d %.1f MB" % (len(objectSizes), sum(objectSizes)/MBYTE))
+    print("document size = %.1f MB" % (len(data)/MBYTE))
+    return data
 
 
 class Obj:
@@ -340,6 +399,7 @@ class Obj:
     Obj.next_id += 1
 
   def __bytes__(self):
+    global textSize, streamSize
     s = []
     s.append(bytes(self.d))
     if self.stream is not None:
@@ -347,7 +407,13 @@ class Obj:
       s.append(self.stream)
       s.append(b'\nendstream\n')
     s.append(b'endobj')
-    return b''.join(s)
+    data = b''.join(s)
+    streamLen = len(self.stream) if self.stream is not None else 0
+    textSize += len(data) - streamLen
+    streamSize += streamLen
+    # print(" textSize=%d" % textSize)
+    # print("streamSize=%d" % streamSize)
+    return data
 
   def ref(self):
       return ref(self.id)
@@ -383,13 +449,20 @@ def readJpegFile(orig):
     filename = orig
     data = readFile(filename)
     compressed = zlib.compress(data, level=9)
+    improved = float(len(compressed)) <= 0.95 * float(len(data))
     print("readJpegFile: %s %d -> %d = %.1f%%" % (orig, len(data), len(compressed),
                                                   100.0 * len(compressed) / len(data),
     ))
-    return compressed
+    if improved:
+        data = compressed
+    return compressed, improved
 
 
 allScales = []
+bgdSizes = []
+fgdSizes = []
+textSize = 0
+streamSize = 0
 
 
 def clip(img):
@@ -403,7 +476,6 @@ def clip(img):
 
     print("-- x0=%d x1=%d w=%d" % (x0, x1, w))
     print("-- y0=%d y1=%d h=%d" % (y0, y1, h))
-
 
     img = img[y0:y1, x0:x1]
 
@@ -446,6 +518,7 @@ def readFile(filename):
 
 
 def writeFile(filename, obj):
+    print("Writing %s" % filename)
     try:
         with open(filename, 'wb') as f:
             return f.write(obj)
@@ -469,5 +542,3 @@ def usage(script, msg):
 
 if __name__ == '__main__':
     main()
-    for i, scale in enumerate(allScales):
-        print("%3d: %5.3f" % (i, scale))
