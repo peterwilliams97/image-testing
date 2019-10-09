@@ -32,14 +32,15 @@ def main():
                         help="min number of pages required")
     parser.add_argument("files", nargs="+",
                         help="input files; glob and @ expansion performed")
-    parser.add_argument("-f", "--force", action="store_true",
+    parser.add_argument("-o", "--force", action="store_true",
                         help="force processing of PDF file")
 
     args = parser.parse_args()
     os.makedirs(outPdfRoot, exist_ok=True)
     pdfFiles = args.files
-    pdfFiles = [fn for fn in pdfFiles if not derived(fn)]
+    # pdfFiles = [fn for fn in pdfFiles if not derived(fn)]
     pdfFiles.sort(key=lambda fn: (os.path.getsize(fn), fn))
+    print("args.number=%d" % args.number)
     if args.number > 0:
         pdfFiles = pdfFiles[:args.number]
     print("Processing %d files" % len(pdfFiles))
@@ -58,13 +59,6 @@ def main():
     print("Processed %d files %s" % (len(processedFiles), processedFiles))
 
 
-def derived(filename):
-    """Return True if `filename` is one of the PDF files we create.
-    """
-    name = os.path.basename(filename)
-    return name.count(".") > 1
-
-
 def processPdfFile(pdfFile, start, end, needed, force):
     assert needed >= 0, needed
     baseName = os.path.basename(pdfFile)
@@ -77,13 +71,18 @@ def processPdfFile(pdfFile, start, end, needed, force):
         print("%s exists. skipping" % outPdfFile)
         return False
 
-    if not os.path.exists(os.path.join(outRoot, "doc-001.png")):
-        os.makedirs(outRoot, exist_ok=True)
-        retval = runGhostscript(pdfFile, outRoot, resample=1)
-        if retval != 0:
-            print("runGhostscript failed outRoot=%s retval=%d. skipping" % (outPdfFile, retval))
-            return False
-        assert retval == 0
+    page1 = os.path.join(outRoot, "doc-001.png")
+    if not force and os.path.exists(page1):
+        print("%s exists. skipping" % page1)
+        return False
+
+    os.makedirs(outRoot, exist_ok=True)
+    retval = runGhostscript(pdfFile, outRoot, resample=1)
+    if retval != 0:
+        print("runGhostscript failed outRoot=%s retval=%d. skipping" % (outPdfFile, retval))
+        return False
+    assert retval == 0
+
     searchMask = os.path.join(outRoot, "doc-*.png")
     print("searchMask=%s" % searchMask)
     fileList = glob(searchMask)
@@ -111,7 +110,6 @@ def runGhostscript(pdf, outputDir, resample=1):
            "-sDEVICE=png16m",
            "-dTextAlphaBits=1",
            "-dGraphicsAlphaBits=1",
-           "-dLastPage=20",
            output,
            pdf]
 
@@ -128,6 +126,13 @@ def runGhostscript(pdf, outputDir, resample=1):
     assert os.path.exists(outputDir)
 
     return retval
+
+
+def derived(filename):
+    """Return True if `filename` is one of the PDF files we create.
+    """
+    name = os.path.basename(filename)
+    return name.count(".") > 1
 
 
 main()

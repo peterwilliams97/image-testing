@@ -52,7 +52,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-b", "--background", action="store_true",
                         help="remove background")
-    parser.add_argument("-f", "--foreground", action="store_true",
+    parser.add_argument("-g", "--foreground", action="store_true",
                         help="remove foreground")
     parser.add_argument("files", nargs="+",
                         help="input files; glob and @ expansion performed")
@@ -65,8 +65,8 @@ def main():
     doFgd = not args.foreground
 
     for inDir in files:
-        # processDirectory(inDir, doBgd, doFgd)
-        processDirectory(inDir, True, True)
+        processDirectory(inDir, doBgd, doFgd)
+        # processDirectory(inDir, True, True)
         # processDirectory(inDir, True, False)
         # processDirectory(inDir, False, True)
 
@@ -160,8 +160,15 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
     doc = Doc()
     pages = Obj({'Type': '/Pages'})
     doc.add_object(pages)
-    catalog = Obj({'Type': '/Catalog',  'Pages': ref(pages.id)})
+    catalog = Obj({'Type': '/Catalog',
+                   'Pages': ref(pages.id),
+                   'Version': b'/1.3',
+                   })
     doc.add_catalog(catalog)
+    info = Obj({'Producer': '(connected.py)',
+                'Creator': '(yo mamma)',
+                })
+    doc.add_info(info)
     symd = doc.add_object(Obj({}, readFile(symbolPath)))
 
     page_objs = []
@@ -234,11 +241,12 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                            'BitsPerComponent': '8',
                            'Mask': '%d 0 R' % maskXobj.id
                            },
-                            black)
+                           black)
             fgdDo = b'%s Do' % fgdIm
             fgdRef = b'%s %s ' % (fgdIm, fgdXobj.ref())
             fgdSizes.append(len(fgdContents))
         else:
+            maskXobj = None
             fgdXobj = None
             fgdDo = b''
             fgdRef = b''
@@ -289,7 +297,7 @@ def buildPDF(symbolPath, pagefiles, doBgd, doFgd):
                     'Contents': cmds.ref(),
                     'Resources': resources.ref()
                     })
-        doc.add_objects([maskXobj, bgdXobj, fgdXobj, cmds, resources, page])
+        doc.add_objects([maskXobj,  fgdXobj, bgdXobj, cmds, resources, page])
         page_objs.append(page)
 
         pages.d.d[b'Count'] = b'%d' % len(page_objs)
@@ -303,6 +311,7 @@ class Doc:
     self.objs = []
     self.pages = []
     self.catalogId = -1
+    self.infoId = -1
 
   def add_objects(self, objs):
     for o in objs:
@@ -317,6 +326,10 @@ class Doc:
     self.catalogId = o.id
     return self.add_object(o)
 
+  def add_info(self, o):
+    self.infoId = o.id
+    return self.add_object(o)
+
   def add_page(self, o):
     self.pages.append(o)
     return self.add_object(o)
@@ -329,63 +342,52 @@ class Doc:
     Doc.pos = 0
     offsets = []
 
+    self.objs.sort(key=lambda o: o.id)
+
     def add(x):
         a.append(x)
-        Doc.pos += len(x) + 1
-
-    self.objs.sort(key=lambda o: (o.stream is not None,
-                                  (not o.stream.endswith(b'Do Q')) if o.stream is not None else True,
-                                  b'Pages' not in o.d.d,
-                                  b'Kids' not in o.d.d,
-                                  o.d.d.get(b'Type', b'Z'),
-                                  ))
+        Doc.pos += len(x) + 2
 
     objectSizes = []
     add(b'%PDF-1.4')
+    add(b'%a\x01\x02\x8f')
     for o in self.objs:
       offsets.append(Doc.pos)
       add(b'%d 0 obj' % o.id)
       objectSizes.append(len(bytes(o)))
       add(bytes(o))
 
-    data = b'\n'.join(a)
-    print("document objects size (0) = %.1f MB" % (len(data)/MBYTE))
-
     xrefstart = Doc.pos
     a.append(b'xref')
     a.append(b'0 %d' % (len(offsets) + 1))
-    a.append(b'0000000000 65535 f ')
-
-    data = b'\n'.join(a)
-    print("document objects size (1) = %.1f MB" % (len(data)/MBYTE))
-
+    line = b'0000000000 65535 f'
+    assert len(line) == 18, (len(line),line)
+    a.append(line)
     for o in offsets:
-        a.append(b'%010d 00000 n ' % o)
-
-    data = b'\n'.join(a)
-    print("document objects size (2) = %.1f MB" % (len(data)/MBYTE))
-
-    a.append(b'')
+        line = b'%010d 00000 n' % o
+        assert len(line) == 18, (len(line), line)
+        a.append(line)
+    print("offsets=%d %s" % (len(offsets), offsets))
+    # a.append(b'')
     a.append(b'trailer')
-    a.append(b'<</Size %d\n/Root %s>>' % (len(offsets) + 1, ref(self.catalogId)))
-
-    data = b'\n'.join(a)
-    print("document objects size (3) = %.1f MB" % (len(data)/MBYTE))
-
+    a.append(b'<<\n\t/Size %d\n\t/Root %s\n\t/Info %s\n>>' %
+             (len(offsets) + 1, ref(self.catalogId), ref(self.infoId)))
     a.append(b'startxref')
     a.append(b'%d' % xrefstart)
-
-    # print("xrefstart = %.1f MB" % (len(bytes(xrefstart))/MBYTE))
-    data = b'\n'.join(a)
-    print("document objects size (4) = %.1f MB" % (len(data)/MBYTE))
-
-    a.append(b'%%EOF')
-
-    data = b'\n'.join(a)
+    a.append(b'%%EOF\n')
+    data = b'\r\n'.join(a)
     print("objects sizes = %d %.1f MB" % (len(objectSizes), sum(objectSizes)/MBYTE))
     print("document size = %.1f MB" % (len(data)/MBYTE))
-    return data
+    assert data[Doc.pos:Doc.pos+4] == b'xref'
 
+    # offsets.append(len(data))
+    # for i in range(1, len(offsets)-1):
+    #     ofs0 = offsets[i]
+    #     ofs1 = offsets[i+1]
+    #     section = data[ofs0:ofs1]
+    #     print("### %d: %6d  %s ... %s" % (i, len(section), section[:48], section[-32:]))
+
+    return data
 
 class Obj:
   next_id = 1
